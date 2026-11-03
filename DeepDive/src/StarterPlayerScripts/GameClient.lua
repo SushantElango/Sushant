@@ -1678,6 +1678,10 @@ local function onSeatChanged(seat)
 		depthPanel.Visible = true
 		depthBar.Visible = true
 		rebuildStationButtons()
+		-- follow the sub itself so the camera never clips inside the hull
+		if sub.PrimaryPart then
+			camera.CameraSubject = sub.PrimaryPart
+		end
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -1698,6 +1702,11 @@ local function onSeatChanged(seat)
 		emergencyButton.Visible = false
 		player.CameraMinZoomDistance = 0.5
 		player.CameraMaxZoomDistance = 40
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			camera.CameraSubject = hum
+		end
 		rebuildStationButtons()
 	end
 end
@@ -2022,6 +2031,59 @@ RunService.RenderStepped:Connect(function()
 		colorFx.Saturation = 0
 		colorFx.Contrast = 0
 		snow.Enabled = false
+	end
+end)
+
+-- Smooth monster movement: the server sends where each monster should be,
+-- and we glide it there every frame so it never looks choppy.
+local monsterVisual = setmetatable({}, { __mode = "k" })
+local function findSub(ownerId)
+	local root = workspace:FindFirstChild("DeepDive")
+	local folder = root and root:FindFirstChild("Subs")
+	if folder then
+		for _, s in ipairs(folder:GetChildren()) do
+			if s:GetAttribute("OwnerId") == ownerId then
+				return s
+			end
+		end
+	end
+	return nil
+end
+RunService.RenderStepped:Connect(function(dt)
+	local root = workspace:FindFirstChild("DeepDive")
+	local folder = root and root:FindFirstChild("Monsters")
+	if not folder then
+		return
+	end
+	local alpha = math.clamp(dt * 12, 0, 1)
+	for _, m in ipairs(folder:GetChildren()) do
+		local part = m.PrimaryPart
+		if part then
+			local target
+			local latched = false
+			local ownerId = m:GetAttribute("LatchOwner")
+			if ownerId then
+				-- stuck to a sub: place it on OUR copy of the sub so it never trails behind
+				local sub = findSub(ownerId)
+				local offset = m:GetAttribute("LatchOffset")
+				if sub and sub.PrimaryPart and offset then
+					local cf = sub.PrimaryPart.CFrame * offset
+					target = CFrame.lookAt(cf.Position, sub.PrimaryPart.Position)
+					latched = true
+				end
+			end
+			target = target or m:GetAttribute("CF")
+			if target then
+				local current = monsterVisual[m]
+				if not current or latched or (current.Position - target.Position).Magnitude > 40 then
+					current = target
+				else
+					current = current:Lerp(target, alpha)
+				end
+				monsterVisual[m] = current
+				part.CFrame = current
+			end
+		end
 	end
 end)
 

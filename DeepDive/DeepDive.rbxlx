@@ -701,32 +701,75 @@ end
 local function buildTerrain()
 	local terrain = workspace.Terrain
 	terrain:Clear()
-	local CELL = 20
+	-- Smooth terrain: write voxels with partial "occupancy" so the floor is
+	-- a smooth surface instead of big stepped blocks.
+	local RES = 4
+	local CHUNK = 64
 	local count = 0
-	for gx = -520, 520, CELL do
-		for gz = -280, 940, CELL do
-			local d = WorldBuilder.FloorDepth(gx, gz)
-			-- fill each column down past its deepest neighbour so cliffs have no holes
-			local deepest = d
-			for _, off in ipairs({ { CELL, 0 }, { -CELL, 0 }, { 0, CELL }, { 0, -CELL } }) do
-				deepest = math.max(deepest, WorldBuilder.FloorDepth(gx + off[1], gz + off[2]))
+
+	local function surfaceY(x, z)
+		local d = WorldBuilder.FloorDepth(x, z)
+		if d > 0 then
+			d += math.noise(x / 23, z / 23, 9.1) * 2.5 -- little ripples on the seabed
+		end
+		return S - d, d
+	end
+
+	for x0 = -520, 520 - CHUNK, CHUNK do
+		for z0 = -280, 940 - CHUNK, CHUNK do
+			local n = CHUNK / RES
+			local tops, depths, slopes = {}, {}, {}
+			local minTop, maxTop = math.huge, -math.huge
+			for ix = 1, n do
+				tops[ix], depths[ix], slopes[ix] = {}, {}, {}
+				local x = x0 + (ix - 0.5) * RES
+				for iz = 1, n do
+					local z = z0 + (iz - 0.5) * RES
+					local top, d = surfaceY(x, z)
+					local dx = surfaceY(x + RES, z) - surfaceY(x - RES, z)
+					local dz = surfaceY(x, z + RES) - surfaceY(x, z - RES)
+					tops[ix][iz] = top
+					depths[ix][iz] = d
+					slopes[ix][iz] = math.sqrt(dx * dx + dz * dz) / (2 * RES)
+					minTop = math.min(minTop, top)
+					maxTop = math.max(maxTop, top)
+				end
 			end
-			local top = S - d
-			local bottom = S - deepest - 16
-			local h = top - bottom
-			terrain:FillBlock(
-				CFrame.new(gx, bottom + h / 2, gz),
-				Vector3.new(CELL, h, CELL),
-				floorMaterial(math.max(d, (d + deepest) / 2))
-			)
-			-- round off the top so the floor looks natural
-			terrain:FillBall(
-				Vector3.new(gx + rng:NextNumber(-3, 3), top - 9, gz + rng:NextNumber(-3, 3)),
-				rng:NextNumber(10.5, 12),
-				floorMaterial(d)
-			)
+			local y0 = math.floor((minTop - 24) / RES) * RES
+			local y1 = math.ceil((maxTop + 4) / RES) * RES
+			local ny = (y1 - y0) / RES
+			local materials, occupancy = {}, {}
+			for ix = 1, n do
+				materials[ix], occupancy[ix] = {}, {}
+				for iy = 1, ny do
+					local mRow, oRow = {}, {}
+					materials[ix][iy], occupancy[ix][iy] = mRow, oRow
+					local yBottom = y0 + (iy - 1) * RES
+					for iz = 1, n do
+						local top = tops[ix][iz]
+						local occ = math.clamp((top - yBottom) / RES, 0, 1)
+						local mat = Enum.Material.Air
+						if occ > 0 then
+							local d = depths[ix][iz]
+							mat = floorMaterial(d)
+							if slopes[ix][iz] > 0.9 and d > 0 then
+								mat = d < 300 and Enum.Material.Rock or Enum.Material.Slate
+							elseif d < -1 and slopes[ix][iz] > 0.6 then
+								mat = Enum.Material.Rock
+							end
+							if top - yBottom > 8 then
+								mat = d < 200 and Enum.Material.Sandstone or Enum.Material.Basalt -- deeper underground
+							end
+						end
+						mRow[iz] = mat
+						oRow[iz] = occ
+					end
+				end
+			end
+			local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x0 + CHUNK, y1, z0 + CHUNK))
+			terrain:WriteVoxels(region, RES, materials, occupancy)
 			count += 1
-			if count % 150 == 0 then
+			if count % 8 == 0 then
 				task.wait()
 			end
 		end
@@ -873,7 +916,7 @@ local function buildDock(root)
 		local marker = deco({
 			Name = "BerthGlow",
 			Size = Vector3.new(14, 0.2, 30),
-			CFrame = CFrame.new(x + 12, S + 0.15, -102),
+			CFrame = CFrame.new(x + 12, S + 0.62, -102),
 			Material = Enum.Material.Neon,
 			Color = Color3.fromRGB(60, 200, 255),
 			Transparency = 0.75,
@@ -1435,10 +1478,9 @@ local function buildWater(root)
 		Name = "WaterSurface",
 		Size = Vector3.new(2048, 1, 2048),
 		CFrame = CFrame.new(0, S, 340),
-		Material = Enum.Material.Glass,
+		Material = Enum.Material.SmoothPlastic,
 		Color = Color3.fromRGB(30, 130, 180),
-		Transparency = 0.35,
-		Reflectance = 0.05,
+		Transparency = 0.3,
 		Parent = root,
 	})
 	_ = water
@@ -2159,7 +2201,7 @@ local function makeRoot(model, size)
 	root.Anchored = true
 	root.CanCollide = false
 	root.CanTouch = false
-	root.CanQuery = true -- harpoons raycast against this
+	root.CanQuery = false -- harpoons use Monsters.FindTarget instead
 	root.Transparency = 1
 	root.Size = size
 	root.CFrame = CFrame.new()
@@ -2391,6 +2433,7 @@ local function spawnMonster(kind, position, packId)
 	model:SetAttribute("MonsterId", m.Id)
 	model:SetAttribute("Kind", kind)
 	model:PivotTo(CFrame.new(position))
+	model:SetAttribute("CF", CFrame.new(position))
 	model.Parent = folder
 	table.insert(active, m)
 	return m
@@ -2525,7 +2568,7 @@ local function stepMonster(m, dt, subs, now)
 		local cf = sub.Root.CFrame * m.LatchOffset
 		m.Pos = cf.Position
 		local center = closestOnSub(sub, m.Pos)
-		m.Root.CFrame = CFrame.lookAt(m.Pos, center) * CFrame.Angles(0, 0, math.sin(now * 8 + m.Phase) * 0.2)
+		m.CF = CFrame.lookAt(m.Pos, center) * CFrame.Angles(0, 0, math.sin(now * 8 + m.Phase) * 0.2)
 		if def.Attack == "Latch" then
 			m.DrainAcc += def.Drain * m.Mult * dt
 			if m.DrainAcc >= 1 then
@@ -2600,9 +2643,9 @@ local function stepMonster(m, dt, subs, now)
 	local look = m.Vel.Magnitude > 0.5 and m.Vel.Unit or Vector3.new(0, 0, -1)
 	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 10 + m.Phase) * 0.18
 	if math.abs(look.Y) > 0.98 then
-		m.Root.CFrame = CFrame.new(m.Pos)
+		m.CF = CFrame.new(m.Pos)
 	else
-		m.Root.CFrame = CFrame.lookAt(m.Pos, m.Pos + look) * CFrame.Angles(0, wiggle, 0)
+		m.CF = CFrame.lookAt(m.Pos, m.Pos + look) * CFrame.Angles(0, wiggle, 0)
 	end
 end
 
@@ -2706,6 +2749,23 @@ function Monsters.Init(context)
 				if not ok then
 					warn("[DeepDive] monster error:", err)
 					removeMonster(m, false)
+				end
+			end
+		end
+
+		-- Send positions to clients as attributes. The server never moves the
+		-- parts itself; each client glides them smoothly (no choppy teleporting).
+		for _, m in ipairs(active) do
+			if not m.Dead then
+				local model = m.Model
+				if m.CF then
+					model:SetAttribute("CF", m.CF)
+				end
+				if m.LatchSub and m.LatchSub.Owner then
+					model:SetAttribute("LatchOwner", m.LatchSub.Owner.UserId)
+					model:SetAttribute("LatchOffset", m.LatchOffset)
+				else
+					model:SetAttribute("LatchOwner", nil)
 				end
 			end
 		end
@@ -4350,7 +4410,7 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 	end
 	local origin = pivotWorld + dir * 3.3
 	local range = st.HarpoonRange
-	local m = Monsters.FindTarget(origin, dir, range, 9)
+	local m = Monsters.FindTarget(origin, dir, range, 12)
 	local hitPos
 	if m then
 		hitPos = m.Pos
@@ -4366,12 +4426,6 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 		params.FilterDescendantsInstances = ignore
 		local result = workspace:Raycast(origin, dir * range, params)
 		hitPos = result and result.Position or (origin + dir * range)
-		if result then
-			local model = result.Instance:FindFirstAncestorOfClass("Model")
-			if model and model.Parent == Monsters.Folder() then
-				m = Monsters.FromModel(model)
-			end
-		end
 	end
 	R.HarpoonFX:FireAllClients(sub.Model, origin, hitPos, m ~= nil)
 	if m then
@@ -6579,6 +6633,10 @@ local function onSeatChanged(seat)
 		depthPanel.Visible = true
 		depthBar.Visible = true
 		rebuildStationButtons()
+		-- follow the sub itself so the camera never clips inside the hull
+		if sub.PrimaryPart then
+			camera.CameraSubject = sub.PrimaryPart
+		end
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -6599,6 +6657,11 @@ local function onSeatChanged(seat)
 		emergencyButton.Visible = false
 		player.CameraMinZoomDistance = 0.5
 		player.CameraMaxZoomDistance = 40
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			camera.CameraSubject = hum
+		end
 		rebuildStationButtons()
 	end
 end
@@ -6923,6 +6986,59 @@ RunService.RenderStepped:Connect(function()
 		colorFx.Saturation = 0
 		colorFx.Contrast = 0
 		snow.Enabled = false
+	end
+end)
+
+-- Smooth monster movement: the server sends where each monster should be,
+-- and we glide it there every frame so it never looks choppy.
+local monsterVisual = setmetatable({}, { __mode = "k" })
+local function findSub(ownerId)
+	local root = workspace:FindFirstChild("DeepDive")
+	local folder = root and root:FindFirstChild("Subs")
+	if folder then
+		for _, s in ipairs(folder:GetChildren()) do
+			if s:GetAttribute("OwnerId") == ownerId then
+				return s
+			end
+		end
+	end
+	return nil
+end
+RunService.RenderStepped:Connect(function(dt)
+	local root = workspace:FindFirstChild("DeepDive")
+	local folder = root and root:FindFirstChild("Monsters")
+	if not folder then
+		return
+	end
+	local alpha = math.clamp(dt * 12, 0, 1)
+	for _, m in ipairs(folder:GetChildren()) do
+		local part = m.PrimaryPart
+		if part then
+			local target
+			local latched = false
+			local ownerId = m:GetAttribute("LatchOwner")
+			if ownerId then
+				-- stuck to a sub: place it on OUR copy of the sub so it never trails behind
+				local sub = findSub(ownerId)
+				local offset = m:GetAttribute("LatchOffset")
+				if sub and sub.PrimaryPart and offset then
+					local cf = sub.PrimaryPart.CFrame * offset
+					target = CFrame.lookAt(cf.Position, sub.PrimaryPart.Position)
+					latched = true
+				end
+			end
+			target = target or m:GetAttribute("CF")
+			if target then
+				local current = monsterVisual[m]
+				if not current or latched or (current.Position - target.Position).Magnitude > 40 then
+					current = target
+				else
+					current = current:Lerp(target, alpha)
+				end
+				monsterVisual[m] = current
+				part.CFrame = current
+			end
+		end
 	end
 end)
 

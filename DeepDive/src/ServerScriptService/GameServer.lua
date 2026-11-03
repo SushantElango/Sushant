@@ -1586,7 +1586,7 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 	end
 	local origin = pivotWorld + dir * 3.3
 	local range = st.HarpoonRange
-	local m = Monsters.FindTarget(origin, dir, range, 9)
+	local m = Monsters.FindTarget(origin, dir, range, 12)
 	local hitPos
 	if m then
 		hitPos = m.Pos
@@ -1602,12 +1602,6 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 		params.FilterDescendantsInstances = ignore
 		local result = workspace:Raycast(origin, dir * range, params)
 		hitPos = result and result.Position or (origin + dir * range)
-		if result then
-			local model = result.Instance:FindFirstAncestorOfClass("Model")
-			if model and model.Parent == Monsters.Folder() then
-				m = Monsters.FromModel(model)
-			end
-		end
 	end
 	R.HarpoonFX:FireAllClients(sub.Model, origin, hitPos, m ~= nil)
 	if m then

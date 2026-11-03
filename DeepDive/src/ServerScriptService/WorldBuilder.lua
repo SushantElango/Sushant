@@ -163,32 +163,75 @@ end
 local function buildTerrain()
 	local terrain = workspace.Terrain
 	terrain:Clear()
-	local CELL = 20
+	-- Smooth terrain: write voxels with partial "occupancy" so the floor is
+	-- a smooth surface instead of big stepped blocks.
+	local RES = 4
+	local CHUNK = 64
 	local count = 0
-	for gx = -520, 520, CELL do
-		for gz = -280, 940, CELL do
-			local d = WorldBuilder.FloorDepth(gx, gz)
-			-- fill each column down past its deepest neighbour so cliffs have no holes
-			local deepest = d
-			for _, off in ipairs({ { CELL, 0 }, { -CELL, 0 }, { 0, CELL }, { 0, -CELL } }) do
-				deepest = math.max(deepest, WorldBuilder.FloorDepth(gx + off[1], gz + off[2]))
+
+	local function surfaceY(x, z)
+		local d = WorldBuilder.FloorDepth(x, z)
+		if d > 0 then
+			d += math.noise(x / 23, z / 23, 9.1) * 2.5 -- little ripples on the seabed
+		end
+		return S - d, d
+	end
+
+	for x0 = -520, 520 - CHUNK, CHUNK do
+		for z0 = -280, 940 - CHUNK, CHUNK do
+			local n = CHUNK / RES
+			local tops, depths, slopes = {}, {}, {}
+			local minTop, maxTop = math.huge, -math.huge
+			for ix = 1, n do
+				tops[ix], depths[ix], slopes[ix] = {}, {}, {}
+				local x = x0 + (ix - 0.5) * RES
+				for iz = 1, n do
+					local z = z0 + (iz - 0.5) * RES
+					local top, d = surfaceY(x, z)
+					local dx = surfaceY(x + RES, z) - surfaceY(x - RES, z)
+					local dz = surfaceY(x, z + RES) - surfaceY(x, z - RES)
+					tops[ix][iz] = top
+					depths[ix][iz] = d
+					slopes[ix][iz] = math.sqrt(dx * dx + dz * dz) / (2 * RES)
+					minTop = math.min(minTop, top)
+					maxTop = math.max(maxTop, top)
+				end
 			end
-			local top = S - d
-			local bottom = S - deepest - 16
-			local h = top - bottom
-			terrain:FillBlock(
-				CFrame.new(gx, bottom + h / 2, gz),
-				Vector3.new(CELL, h, CELL),
-				floorMaterial(math.max(d, (d + deepest) / 2))
-			)
-			-- round off the top so the floor looks natural
-			terrain:FillBall(
-				Vector3.new(gx + rng:NextNumber(-3, 3), top - 9, gz + rng:NextNumber(-3, 3)),
-				rng:NextNumber(10.5, 12),
-				floorMaterial(d)
-			)
+			local y0 = math.floor((minTop - 24) / RES) * RES
+			local y1 = math.ceil((maxTop + 4) / RES) * RES
+			local ny = (y1 - y0) / RES
+			local materials, occupancy = {}, {}
+			for ix = 1, n do
+				materials[ix], occupancy[ix] = {}, {}
+				for iy = 1, ny do
+					local mRow, oRow = {}, {}
+					materials[ix][iy], occupancy[ix][iy] = mRow, oRow
+					local yBottom = y0 + (iy - 1) * RES
+					for iz = 1, n do
+						local top = tops[ix][iz]
+						local occ = math.clamp((top - yBottom) / RES, 0, 1)
+						local mat = Enum.Material.Air
+						if occ > 0 then
+							local d = depths[ix][iz]
+							mat = floorMaterial(d)
+							if slopes[ix][iz] > 0.9 and d > 0 then
+								mat = d < 300 and Enum.Material.Rock or Enum.Material.Slate
+							elseif d < -1 and slopes[ix][iz] > 0.6 then
+								mat = Enum.Material.Rock
+							end
+							if top - yBottom > 8 then
+								mat = d < 200 and Enum.Material.Sandstone or Enum.Material.Basalt -- deeper underground
+							end
+						end
+						mRow[iz] = mat
+						oRow[iz] = occ
+					end
+				end
+			end
+			local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x0 + CHUNK, y1, z0 + CHUNK))
+			terrain:WriteVoxels(region, RES, materials, occupancy)
 			count += 1
-			if count % 150 == 0 then
+			if count % 8 == 0 then
 				task.wait()
 			end
 		end
@@ -335,7 +378,7 @@ local function buildDock(root)
 		local marker = deco({
 			Name = "BerthGlow",
 			Size = Vector3.new(14, 0.2, 30),
-			CFrame = CFrame.new(x + 12, S + 0.15, -102),
+			CFrame = CFrame.new(x + 12, S + 0.62, -102),
 			Material = Enum.Material.Neon,
 			Color = Color3.fromRGB(60, 200, 255),
 			Transparency = 0.75,
@@ -897,10 +940,9 @@ local function buildWater(root)
 		Name = "WaterSurface",
 		Size = Vector3.new(2048, 1, 2048),
 		CFrame = CFrame.new(0, S, 340),
-		Material = Enum.Material.Glass,
+		Material = Enum.Material.SmoothPlastic,
 		Color = Color3.fromRGB(30, 130, 180),
-		Transparency = 0.35,
-		Reflectance = 0.05,
+		Transparency = 0.3,
 		Parent = root,
 	})
 	_ = water

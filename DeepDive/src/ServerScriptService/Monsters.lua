@@ -56,7 +56,7 @@ local function makeRoot(model, size)
 	root.Anchored = true
 	root.CanCollide = false
 	root.CanTouch = false
-	root.CanQuery = true -- harpoons raycast against this
+	root.CanQuery = false -- harpoons use Monsters.FindTarget instead
 	root.Transparency = 1
 	root.Size = size
 	root.CFrame = CFrame.new()
@@ -288,6 +288,7 @@ local function spawnMonster(kind, position, packId)
 	model:SetAttribute("MonsterId", m.Id)
 	model:SetAttribute("Kind", kind)
 	model:PivotTo(CFrame.new(position))
+	model:SetAttribute("CF", CFrame.new(position))
 	model.Parent = folder
 	table.insert(active, m)
 	return m
@@ -422,7 +423,7 @@ local function stepMonster(m, dt, subs, now)
 		local cf = sub.Root.CFrame * m.LatchOffset
 		m.Pos = cf.Position
 		local center = closestOnSub(sub, m.Pos)
-		m.Root.CFrame = CFrame.lookAt(m.Pos, center) * CFrame.Angles(0, 0, math.sin(now * 8 + m.Phase) * 0.2)
+		m.CF = CFrame.lookAt(m.Pos, center) * CFrame.Angles(0, 0, math.sin(now * 8 + m.Phase) * 0.2)
 		if def.Attack == "Latch" then
 			m.DrainAcc += def.Drain * m.Mult * dt
 			if m.DrainAcc >= 1 then
@@ -497,9 +498,9 @@ local function stepMonster(m, dt, subs, now)
 	local look = m.Vel.Magnitude > 0.5 and m.Vel.Unit or Vector3.new(0, 0, -1)
 	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 10 + m.Phase) * 0.18
 	if math.abs(look.Y) > 0.98 then
-		m.Root.CFrame = CFrame.new(m.Pos)
+		m.CF = CFrame.new(m.Pos)
 	else
-		m.Root.CFrame = CFrame.lookAt(m.Pos, m.Pos + look) * CFrame.Angles(0, wiggle, 0)
+		m.CF = CFrame.lookAt(m.Pos, m.Pos + look) * CFrame.Angles(0, wiggle, 0)
 	end
 end
 
@@ -603,6 +604,23 @@ function Monsters.Init(context)
 				if not ok then
 					warn("[DeepDive] monster error:", err)
 					removeMonster(m, false)
+				end
+			end
+		end
+
+		-- Send positions to clients as attributes. The server never moves the
+		-- parts itself; each client glides them smoothly (no choppy teleporting).
+		for _, m in ipairs(active) do
+			if not m.Dead then
+				local model = m.Model
+				if m.CF then
+					model:SetAttribute("CF", m.CF)
+				end
+				if m.LatchSub and m.LatchSub.Owner then
+					model:SetAttribute("LatchOwner", m.LatchSub.Owner.UserId)
+					model:SetAttribute("LatchOffset", m.LatchOffset)
+				else
+					model:SetAttribute("LatchOwner", nil)
 				end
 			end
 		end
