@@ -470,12 +470,7 @@ end
 Monsters.ClosestOnSub = closestOnSub
 
 local function clampToWater(pos)
-	local o = Config.Ocean
-	local x = math.clamp(pos.X, o.MinX, o.MaxX)
-	local z = math.clamp(pos.Z, o.MinZ, o.MaxZ)
-	local floorY = ctx.FloorY(x, z) + 4
-	local y = math.clamp(pos.Y, floorY, S - 8)
-	return Vector3.new(x, y, z)
+	return ctx.ClampToWater(pos)
 end
 
 local function safeUnit(v)
@@ -603,10 +598,15 @@ local function trySpawnNear(sub)
 	local def = Config.Monsters[kind]
 	local count = rng:NextInteger(def.Group[1], def.Group[2])
 	count = math.min(count, maxHere - nearby)
+	-- monsters come out of the dark above or below you, somewhere in the Well
 	local angle = rng:NextNumber(0, math.pi * 2)
 	local dist = rng:NextNumber(Config.Spawning.SpawnDistance[1], Config.Spawning.SpawnDistance[2])
-	local center =
-		clampToWater(subPos + Vector3.new(math.cos(angle) * dist, rng:NextNumber(-25, 25), math.sin(angle) * dist))
+	local vertical = (rng:NextNumber() < 0.6 and 1 or -1) * dist
+	local flat = Vector3.new(math.cos(angle), 0, math.sin(angle)) * rng:NextNumber(10, 60)
+	local center = clampToWater(Vector3.new(flat.X, subPos.Y + vertical, flat.Z))
+	if (center - subPos).Magnitude < 35 then
+		return -- too close to pop in without being seen
+	end
 	-- don't spawn shallow monsters right under the dock
 	if S - center.Y < Config.Spawning.MinDepth - 8 then
 		return

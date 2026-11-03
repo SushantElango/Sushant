@@ -20,13 +20,6 @@ Config.Version = "1.0"
 Config.SURFACE_Y = 1000
 Config.SurfaceDepth = 6 -- shallower than this counts as "surfaced"
 
-Config.Ocean = {
-	MinX = -430,
-	MaxX = 430,
-	MinZ = -120,
-	MaxZ = 840,
-}
-
 Config.Zones = {
 	{
 		Name = "Sunlit Reef",
@@ -277,8 +270,8 @@ Config.Loot = {
 	RespawnMin = 20,
 	RespawnMax = 45,
 	SpawnCount = {
-		["Sunlit Reef"] = 55,
-		["Twilight Drop"] = 50,
+		["Sunlit Reef"] = 42,
+		["Twilight Drop"] = 45,
 	},
 	Types = {
 		Scrap = {
@@ -405,7 +398,7 @@ Config.Spawning = {
 	CheckEvery = 2.5,
 	GlobalCap = 40,
 	MinDepth = 40, -- no monsters this close to the surface
-	SpawnDistance = { 85, 125 },
+	SpawnDistance = { 45, 75 }, -- above/below the sub, inside the Well
 	DespawnDistance = 260,
 	Zones = {
 		["Sunlit Reef"] = {
@@ -486,11 +479,15 @@ Config.Lore = {
 -- SOUNDS  (built-in Roblox sounds; swap for Creator Store IDs anytime)
 ------------------------------------------------------------------------
 Config.Sounds = {
-	Ping = "rbxasset://sounds/electronicpingshort.wav",
+	Ping = "rbxasset://sounds/electronicpingshort.wav", -- sonar
 	Harpoon = "rbxasset://sounds/swoosh.wav",
 	Hit = "rbxasset://sounds/collide.wav",
 	Coin = "rbxasset://sounds/electronicpingshort.wav",
 	Click = "rbxasset://sounds/electronicpingshort.wav",
+	Splash = "rbxasset://sounds/impact_water.mp3",
+	Engine = "rbxasset://sounds/Rocket whoosh 01.wav", -- looped low = engine hum
+	Alarm = "rbxasset://sounds/electronicpingshort.wav",
+	Creak = "rbxasset://sounds/collide.wav",
 }
 
 ------------------------------------------------------------------------

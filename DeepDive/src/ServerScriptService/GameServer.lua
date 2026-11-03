@@ -560,7 +560,7 @@ local function updateBerthSign(berth)
 		label.Text = text
 		label.TextColor3 = berth.Owner and Color3.fromRGB(255, 220, 120) or Color3.new(1, 1, 1)
 	end
-	berth.Marker.Transparency = berth.Owner and 0.7 or 0.92
+	berth.Marker.Color = berth.Owner and Color3.fromRGB(255, 200, 80) or Color3.fromRGB(140, 200, 255)
 end
 
 local function spawnSub(owner)
@@ -1154,23 +1154,10 @@ local function createLoot(def, pos, value, zoneName, signal)
 end
 
 local function randomFloorPoint(zoneName)
-	local o = Config.Ocean
-	for _ = 1, 30 do
-		local x = rng:NextNumber(o.MinX + 10, o.MaxX - 10)
-		local z
-		if zoneName == "Sunlit Reef" then
-			z = rng:NextNumber(-80, 290)
-		else
-			z = rng:NextNumber(420, 830)
-		end
-		local d = WorldBuilder.FloorDepth(x, z)
-		local valid = (zoneName == "Sunlit Reef" and d > 18 and d < 200)
-			or (zoneName == "Twilight Drop" and d >= 300 and d < 650)
-		if valid then
-			return Vector3.new(x, WorldBuilder.RealFloorY(x, z) + 1.6, z)
-		end
+	if zoneName == "Sunlit Reef" then
+		return WorldBuilder.LootSpot(25, 198)
 	end
-	return nil
+	return WorldBuilder.LootSpot(215, 620)
 end
 
 local function pickLootType(zoneName)
@@ -1376,7 +1363,7 @@ end
 ------------------------------------------------------------------------
 Monsters.Init({
 	RootFolder = rootFolder,
-	FloorY = WorldBuilder.FloorY,
+	ClampToWater = WorldBuilder.ClampToWater,
 	GetDivingSubs = function()
 		local list = {}
 		for _, sub in pairs(subs) do
@@ -1437,7 +1424,7 @@ local function stepSub(sub, dt)
 	sub.LastPos = pos
 
 	-- Way out of bounds? Send it home.
-	if pos.Y > S + 15 or depth > 1200 or math.abs(pos.X) > 520 or pos.Z > 950 or pos.Z < -260 then
+	if pos.Y > S + 15 or depth > 700 or Vector3.new(pos.X, 0, pos.Z).Magnitude > 200 then
 		resetToBerth(sub)
 		return
 	end

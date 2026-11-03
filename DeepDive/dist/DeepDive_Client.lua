@@ -2055,42 +2055,131 @@ snow.Color = ColorSequence.new(Color3.fromRGB(220, 240, 255))
 snow.Enabled = false
 snow.Parent = snowPart
 
+-- Atmosphere: sunny haze on top, thick dark water as you go down
+local atmos = Instance.new("Atmosphere")
+atmos.Parent = Lighting
+local dof = Instance.new("DepthOfFieldEffect")
+dof.FarIntensity = 0.35
+dof.FocusDistance = 20
+dof.InFocusRadius = 45
+dof.NearIntensity = 0
+dof.Enabled = false
+dof.Parent = Lighting
+local SoundService = game:GetService("SoundService")
+
 local SURFACE_LIGHT = {
 	Ambient = Color3.fromRGB(70, 80, 95),
-	OutdoorAmbient = Color3.fromRGB(130, 140, 150),
-	Brightness = 2,
-	FogColor = Color3.fromRGB(190, 215, 235),
+	OutdoorAmbient = Color3.fromRGB(130, 140, 155),
+	Brightness = 2.6,
 }
 
+local wasUnderwater = false
 RunService.RenderStepped:Connect(function()
 	local camPos = camera.CFrame.Position
 	local d = S - camPos.Y
-	if d > 0.3 then
+	local under = d > 0.3
+	if under then
 		local t = math.clamp(d / 620, 0, 1)
 		local fogBonus = currentSub and (currentSub:GetAttribute("FogBonus") or 0) or 0
-		Lighting.FogStart = 0
-		Lighting.FogEnd = (330 - 275 * t ^ 0.65) + fogBonus * (0.4 + t)
-		Lighting.FogColor = lerpColor(Color3.fromRGB(30, 110, 150), Color3.fromRGB(2, 6, 14), t * 1.3)
-		Lighting.Ambient = lerpColor(Color3.fromRGB(60, 100, 130), Color3.fromRGB(6, 8, 14), t * 1.5)
-		Lighting.OutdoorAmbient = lerpColor(Color3.fromRGB(70, 120, 150), Color3.fromRGB(4, 6, 10), t * 1.5)
-		Lighting.Brightness = 1.4 * (1 - math.clamp(t * 1.8, 0, 1))
-		colorFx.TintColor = lerpColor(Color3.fromRGB(190, 225, 255), Color3.fromRGB(150, 180, 255), t)
-		colorFx.Saturation = -0.1
-		colorFx.Contrast = 0.05
+		atmos.Density = math.clamp(0.48 + 0.42 * t ^ 0.6 - fogBonus / 450, 0.3, 0.92)
+		atmos.Offset = 0
+		atmos.Color = lerpColor(Color3.fromRGB(40, 125, 155), Color3.fromRGB(2, 8, 16), t * 1.3)
+		atmos.Decay = lerpColor(Color3.fromRGB(20, 75, 100), Color3.fromRGB(1, 3, 8), t * 1.3)
+		atmos.Glare = 0
+		atmos.Haze = math.max(0, 0.8 - t * 2)
+		Lighting.Ambient = lerpColor(Color3.fromRGB(60, 100, 130), Color3.fromRGB(5, 7, 12), t * 1.5)
+		Lighting.OutdoorAmbient = lerpColor(Color3.fromRGB(70, 120, 150), Color3.fromRGB(3, 5, 9), t * 1.5)
+		Lighting.Brightness = 1.6 * (1 - math.clamp(t * 1.8, 0, 1))
+		colorFx.TintColor = lerpColor(Color3.fromRGB(190, 228, 255), Color3.fromRGB(150, 180, 255), t)
+		colorFx.Saturation = -0.08
+		colorFx.Contrast = 0.06
 		snow.Enabled = true
 		snowPart.CFrame = CFrame.new(camPos)
+		dof.Enabled = true
+		sunRays.Enabled = false
 	else
-		Lighting.FogEnd = 100000
-		Lighting.FogColor = SURFACE_LIGHT.FogColor
+		atmos.Density = 0.3
+		atmos.Offset = 0.25
+		atmos.Color = Color3.fromRGB(199, 215, 230)
+		atmos.Decay = Color3.fromRGB(110, 135, 155)
+		atmos.Glare = 0.4
+		atmos.Haze = 1.3
 		Lighting.Ambient = SURFACE_LIGHT.Ambient
 		Lighting.OutdoorAmbient = SURFACE_LIGHT.OutdoorAmbient
 		Lighting.Brightness = SURFACE_LIGHT.Brightness
 		colorFx.TintColor = Color3.new(1, 1, 1)
-		colorFx.Saturation = 0
-		colorFx.Contrast = 0
+		colorFx.Saturation = 0.05
+		colorFx.Contrast = 0.03
 		snow.Enabled = false
+		dof.Enabled = false
+		sunRays.Enabled = true
+	end
+	if under ~= wasUnderwater then
+		wasUnderwater = under
+		-- muffled, echoing sound underwater
+		pcall(function()
+			SoundService.AmbientReverb = under and Enum.ReverbType.UnderWater or Enum.ReverbType.NoReverb
+		end)
+		playSound("Splash", 0.6, under and 0.8 or 1.1)
 	end
 end)
+
+------------------------------------------------------------------------
+-- Sub sounds: engine hum on every nearby sub, warning alarms, hull creaks
+------------------------------------------------------------------------
+do
+	local engines = setmetatable({}, { __mode = "k" })
+	local alarmTimer, creakTimer = 0, 3
+	RunService.Heartbeat:Connect(function(dt)
+		local root = workspace:FindFirstChild("DeepDive")
+		local folder = root and root:FindFirstChild("Subs")
+		if folder then
+			for _, sub in ipairs(folder:GetChildren()) do
+				local r = sub.PrimaryPart
+				if r then
+					local snd = engines[sub]
+					if not snd and Config.Sounds.Engine and Config.Sounds.Engine ~= "" then
+						snd = Instance.new("Sound")
+						snd.Name = "EngineHum"
+						snd.SoundId = Config.Sounds.Engine
+						snd.Looped = true
+						snd.RollOffMaxDistance = 140
+						snd.RollOffMinDistance = 12
+						snd.Volume = 0
+						snd.Parent = r
+						snd:Play()
+						engines[sub] = snd
+					end
+					if snd then
+						local spd = r.AssemblyLinearVelocity.Magnitude
+						local target = 0.12 + math.min(spd, 35) * 0.018
+						snd.Volume += (target - snd.Volume) * math.clamp(dt * 3, 0, 1)
+						snd.PlaybackSpeed = 0.45 + math.min(spd, 35) * 0.014
+					end
+				end
+			end
+		end
+		local sub = currentSub
+		if not sub or not sub.PrimaryPart then
+			return
+		end
+		local depth = S - sub.PrimaryPart.Position.Y
+		local maxDepth = sub:GetAttribute("MaxDepth") or 210
+		local hp, maxHp = sub:GetAttribute("HP") or 1, sub:GetAttribute("MaxHP") or 1
+		local danger = depth > maxDepth or hp / maxHp < 0.3 or (sub:GetAttribute("Oxygen") or 99) <= 15
+		alarmTimer -= dt
+		if danger and alarmTimer <= 0 then
+			alarmTimer = 1.1
+			playSound("Alarm", 0.45, 0.55)
+		end
+		-- the hull groans when you get close to its depth limit
+		creakTimer -= dt
+		if depth > maxDepth - 40 and creakTimer <= 0 then
+			creakTimer = math.random(3, 7)
+			playSound("Creak", 0.5, 0.25 + math.random() * 0.15)
+		end
+	end)
+end
 
 -- Smooth monster movement: the server sends where each monster should be,
 -- and we glide it there every frame so it never looks choppy.
@@ -2531,6 +2620,13 @@ local function startOceanLife()
 			dir = dir.Magnitude > 0 and dir.Unit or Vector3.new(1, 0, 0)
 			local c = camPos + dir * (25 + math.random() * 40) + Vector3.new(0, math.random() * 16 - 8, 0)
 			c = Vector3.new(c.X, math.min(c.Y, S - 5), c.Z)
+			-- keep schools inside the Well (it narrows at 200 m)
+			local limit = (S - c.Y) < 205 and 85 or 62
+			local flat = Vector3.new(c.X, 0, c.Z)
+			if flat.Magnitude > limit then
+				flat = flat.Unit * limit
+				c = Vector3.new(flat.X, c.Y, flat.Z)
+			end
 			newSchool(c, deep)
 		end
 		local parts, cframes = {}, {}
@@ -2543,6 +2639,11 @@ local function startOceanLife()
 				math.noise(i, t * 0.2) * 0.6
 			)
 			school.Dir = (school.Dir + turn * dt).Unit
+			local flatC = Vector3.new(school.Center.X, 0, school.Center.Z)
+			local limitR = (S - school.Center.Y) < 205 and 85 or 62
+			if flatC.Magnitude > limitR then
+				school.Dir = (school.Dir - flatC.Unit * dt * 3).Unit -- turn away from the wall
+			end
 			if school.Center.Y > S - 5 then
 				school.Dir = Vector3.new(school.Dir.X, -math.abs(school.Dir.Y) - 0.2, school.Dir.Z).Unit
 			end

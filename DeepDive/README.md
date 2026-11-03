@@ -1,7 +1,7 @@
 # Deep Dive (Roblox), Version 1
 
-A submarine game. You build and upgrade a sub at your dock, dive into a dark
-ocean, salvage treasure, fight sea monsters, and surface to cash in your haul.
+A submarine game. You build and upgrade a sub at your dock, dive down THE WELL
+(a giant 600 m round shaft under a harbor town), salvage treasure, fight sea monsters, and surface to cash in your haul.
 If your sub sinks first, you lose the haul.
 
 All the code is here. **The map, the subs, the monsters and every menu are
@@ -20,7 +20,7 @@ built by the scripts**, so you don't need to make any models by hand.
    **`dist/DeepDive_Client.lua`**.
 4. Press **Play**.
 
-Or skip the pasting: open `DeepDive.rbxlx` with **File > Open from File**.
+**Easiest:** skip the pasting and open `DeepDive.rbxlx` with **File > Open from File**. It also turns on Future lighting for you.
 
 The two `dist/` files are generated from the smaller modules in `src/` by
 `python3 tools/build_place.py`. Edit the modules, then rebuild.

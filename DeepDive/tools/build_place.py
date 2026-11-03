@@ -118,6 +118,14 @@ xml = ('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" '
        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
        'xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">'
        + service("Workspace", [])
+       # Future lighting = realistic shadows and glowing lights (scripts can't set this)
+       + ('<Item class="Lighting" referent="RBXLIGHT"><Properties>'
+          '<string name="Name">Lighting</string>'
+          '<token name="Technology">4</token>'
+          '<bool name="GlobalShadows">true</bool>'
+          '<float name="EnvironmentDiffuseScale">1</float>'
+          '<float name="EnvironmentSpecularScale">1</float>'
+          '</Properties></Item>')
        + service("ServerScriptService", [script_item("Script", "DeepDiveServer", server)])
        + service("StarterPlayer", [service("StarterPlayerScripts", [script_item("LocalScript", "DeepDiveClient", client)])])
        + "</roblox>")

@@ -35,13 +35,6 @@ Config.Version = "1.0"
 Config.SURFACE_Y = 1000
 Config.SurfaceDepth = 6 -- shallower than this counts as "surfaced"
 
-Config.Ocean = {
-	MinX = -430,
-	MaxX = 430,
-	MinZ = -120,
-	MaxZ = 840,
-}
-
 Config.Zones = {
 	{
 		Name = "Sunlit Reef",
@@ -292,8 +285,8 @@ Config.Loot = {
 	RespawnMin = 20,
 	RespawnMax = 45,
 	SpawnCount = {
-		["Sunlit Reef"] = 55,
-		["Twilight Drop"] = 50,
+		["Sunlit Reef"] = 42,
+		["Twilight Drop"] = 45,
 	},
 	Types = {
 		Scrap = {
@@ -420,7 +413,7 @@ Config.Spawning = {
 	CheckEvery = 2.5,
 	GlobalCap = 40,
 	MinDepth = 40, -- no monsters this close to the surface
-	SpawnDistance = { 85, 125 },
+	SpawnDistance = { 45, 75 }, -- above/below the sub, inside the Well
 	DespawnDistance = 260,
 	Zones = {
 		["Sunlit Reef"] = {
@@ -501,11 +494,15 @@ Config.Lore = {
 -- SOUNDS  (built-in Roblox sounds; swap for Creator Store IDs anytime)
 ------------------------------------------------------------------------
 Config.Sounds = {
-	Ping = "rbxasset://sounds/electronicpingshort.wav",
+	Ping = "rbxasset://sounds/electronicpingshort.wav", -- sonar
 	Harpoon = "rbxasset://sounds/swoosh.wav",
 	Hit = "rbxasset://sounds/collide.wav",
 	Coin = "rbxasset://sounds/electronicpingshort.wav",
 	Click = "rbxasset://sounds/electronicpingshort.wav",
+	Splash = "rbxasset://sounds/impact_water.mp3",
+	Engine = "rbxasset://sounds/Rocket whoosh 01.wav", -- looped low = engine hum
+	Alarm = "rbxasset://sounds/electronicpingshort.wav",
+	Creak = "rbxasset://sounds/collide.wav",
 }
 
 ------------------------------------------------------------------------
@@ -558,15 +555,21 @@ local WorldBuilderModule = (function()
 	WorldBuilder  (ModuleScript)
 	LOCATION: ServerScriptService > WorldBuilder
 
-	Builds the whole map with code when the server starts:
-	  * the sea floor (Terrain): Sunlit Reef shelf, the Twilight Drop cliff,
-	    the trench and the sealed door at the bottom
-	  * the floating home dock with 8 berths, the shop hut, the depth
-	    leaderboard and a lighthouse
-	  * reef decorations: coral, kelp, a shipwreck, glowing crystals and a
-	    whale skeleton
+	Builds the map with code when the server starts:
 
-	You don't need to build anything by hand.
+	  THE WELL - a giant round shaft that drops 600 m straight down.
+	    0-200 m    Sunlit Reef: bright limestone walls, coral, sponges, kelp
+	               on rock ledges, light rays from the surface
+	    ~200 m     the Lip: the shaft narrows, a wrecked research sub rests here
+	    200-600 m  Twilight Drop: dark slate and basalt, glowing crystals,
+	               hidden side caves
+	    ~600 m     the bottom: silt floor, whale skeleton, bubbling vents and
+	               the sealed door to the Midnight Trench (future update)
+	    Depth-marker lights ring the wall every 50 m.
+
+	  HARBOR TOWN on top: a round boardwalk dock with 8 berths, salvage shop,
+	  warehouses, shipping containers, a crane, lamp posts, palm trees and a
+	  lighthouse, on an island in the open sea.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -578,6 +581,7 @@ local S = Config.SURFACE_Y
 local WorldBuilder = {}
 
 local rng = Random.new(1337) -- fixed seed = same map every server
+local TAU = math.pi * 2
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -619,11 +623,25 @@ local function deco(props)
 	props.CanCollide = false
 	props.CanQuery = false
 	props.CanTouch = false
-	props.CastShadow = false
+	if props.CastShadow == nil then
+		props.CastShadow = false
+	end
 	return part(props)
 end
 
-local function surfaceText(parent, face, text, textColor, bgColor, size)
+local SPHERE = Enum.MeshType.Sphere
+
+local function light(parent, range, brightness, color, shadows)
+	local l = Instance.new("PointLight")
+	l.Range = range
+	l.Brightness = brightness
+	l.Color = color
+	l.Shadows = shadows == true
+	l.Parent = parent
+	return l
+end
+
+local function surfaceText(parent, face, text, textColor, size)
 	local gui = Instance.new("SurfaceGui")
 	gui.Face = face
 	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
@@ -632,8 +650,7 @@ local function surfaceText(parent, face, text, textColor, bgColor, size)
 	gui.Parent = parent
 	local label = Instance.new("TextLabel")
 	label.Size = UDim2.fromScale(1, 1)
-	label.BackgroundColor3 = bgColor or Color3.fromRGB(20, 30, 50)
-	label.BackgroundTransparency = bgColor and 0 or 1
+	label.BackgroundTransparency = 1
 	label.TextColor3 = textColor or Color3.new(1, 1, 1)
 	label.Font = Enum.Font.FredokaOne
 	label.TextScaled = true
@@ -648,452 +665,653 @@ local function surfaceText(parent, face, text, textColor, bgColor, size)
 	return label, gui
 end
 
-------------------------------------------------------------------------
--- Sea floor shape. Returns depth in metres at (x, z).
--- Negative = above the water (land).
-------------------------------------------------------------------------
-function WorldBuilder.FloorDepth(x, z)
-	local d
-	if z < -190 then
-		d = -4 -- the shore behind the dock
-	elseif z < -150 then
-		d = lerp(-4, 24, smooth((z + 190) / 40))
-	elseif z < 300 then
-		-- Sunlit Reef: gentle slope with bumpy reef hills
-		d = lerp(24, 178, smooth((z + 150) / 450)) + math.noise(x / 85, z / 85, 1.7) * 16
-		d = math.min(d, 194) -- always reachable by the starter Tin Can (210 m)
-	elseif z < 400 then
-		-- The Twilight Drop: a steep underwater cliff
-		d = lerp(182, 512, smooth((z - 300) / 100))
-	else
-		-- Twilight floor + the trench that leads to the sealed door
-		d = 522 + math.noise(x / 130, z / 130, 4.2) * 18
-		local tx = x / 95
-		local tz = (z - 720) / 140
-		local r = tx * tx + tz * tz
-		if r < 1 then
-			d = d + 78 * (1 - r)
-		end
-		-- V1 stays inside the Twilight Drop; the sealed door leads deeper later
-		d = math.min(d, 598)
-	end
-	-- Rock walls around the edge of the ocean
-	local ex = 500 - math.abs(x)
-	if ex < 70 then
-		d = lerp(-14, d, smooth(ex / 70))
-	end
-	local ez = 910 - z
-	if ez < 70 then
-		d = lerp(-14, d, smooth(ez / 70))
+-- A frame at radius r / angle theta: local X points OUT from the centre,
+-- local Z runs along the circle, so "-X" faces the middle of the Well.
+local function radial(r, theta, y)
+	return CFrame.new(math.cos(theta) * r, y, math.sin(theta) * r) * CFrame.Angles(0, -theta, 0)
+end
+
+local function angleDiff(a, b)
+	local d = (a - b) % TAU
+	if d > math.pi then
+		d = TAU - d
 	end
 	return d
+end
+
+------------------------------------------------------------------------
+-- Shape of the Well
+------------------------------------------------------------------------
+local FLOOR_DEPTH = 606
+
+function WorldBuilder.ShaftRadius(depth)
+	if depth < 0 then
+		return 132
+	elseif depth < 30 then
+		return lerp(132, 106, smooth(depth / 30))
+	elseif depth < 200 then
+		return 106
+	elseif depth < 216 then
+		return lerp(106, 82, smooth((depth - 200) / 16))
+	end
+	return 82
+end
+
+local CAVES = {
+	{ Angle = 3.3, Depth = 140 },
+	{ Angle = 0.6, Depth = 300 },
+	{ Angle = 2.4, Depth = 385 },
+	{ Angle = 4.1, Depth = 470 },
+	{ Angle = 5.4, Depth = 545 },
+}
+WorldBuilder.Caves = CAVES
+
+-- Distance from the centre to the rock wall at this angle and depth.
+function WorldBuilder.WallRadius(theta, depth)
+	local base = WorldBuilder.ShaftRadius(depth)
+	if depth < -1 then
+		return base
+	end
+	local c, s = math.cos(theta), math.sin(theta)
+	local r = base + math.noise(c * 1.6, s * 1.6, depth / 38) * 9 + math.noise(c * 5, s * 5, depth / 9) * 2.5
+	-- rounded rock ledges stick out every 45 m
+	local m = depth % 45
+	if depth > 25 and m < 9 then
+		r -= 7 * math.sin(m / 9 * math.pi)
+	end
+	-- side caves
+	for _, cave in ipairs(CAVES) do
+		local ad = angleDiff(theta, cave.Angle)
+		local dd = math.abs(depth - cave.Depth)
+		if ad < 0.32 and dd < 16 then
+			r += 30 * (1 - ad / 0.32) * (1 - (dd / 16) ^ 2)
+		end
+	end
+	return r
+end
+
+function WorldBuilder.FloorDepth(x, z)
+	local r = math.sqrt(x * x + z * z)
+	return FLOOR_DEPTH + 10 - 14 * math.min(r / 82, 1.3) ^ 2 + math.noise(x / 30, z / 30, 3.3) * 3
 end
 
 function WorldBuilder.FloorY(x, z)
 	return S - WorldBuilder.FloorDepth(x, z)
 end
 
--- Exact floor height by raycasting the terrain (use after the terrain is built).
+-- Keeps a point inside the water of the Well (used by monsters).
+function WorldBuilder.ClampToWater(pos, margin)
+	margin = margin or 18
+	local y = math.min(pos.Y, S - 8)
+	y = math.max(y, WorldBuilder.FloorY(pos.X, pos.Z) + 4)
+	local depth = S - y
+	local maxR = math.max(10, WorldBuilder.ShaftRadius(depth) - margin)
+	local flat = Vector3.new(pos.X, 0, pos.Z)
+	if flat.Magnitude > maxR then
+		flat = flat.Unit * maxR
+	end
+	return Vector3.new(flat.X, y, flat.Z)
+end
+
 local terrainParams = RaycastParams.new()
 terrainParams.FilterType = Enum.RaycastFilterType.Include
 terrainParams.FilterDescendantsInstances = { workspace.Terrain }
 terrainParams.IgnoreWater = true
-function WorldBuilder.RealFloorY(x, z)
-	local guess = WorldBuilder.FloorY(x, z)
-	local result = workspace:Raycast(Vector3.new(x, guess + 40, z), Vector3.new(0, -90, 0), terrainParams)
+
+-- Finds the rock wall at this angle and depth. Returns position, normal.
+local function wallHit(theta, depth)
+	local origin = Vector3.new(0, S - depth, 0)
+	local dir = Vector3.new(math.cos(theta), 0, math.sin(theta))
+	local result = workspace:Raycast(origin, dir * 260, terrainParams)
 	if result then
-		return result.Position.Y
+		return result.Position, result.Normal
 	end
-	return guess
+	return nil
 end
 
-local function floorMaterial(d)
-	if d < -1 then
-		return Enum.Material.Grass
-	elseif d < 4 then
-		return Enum.Material.Sand
-	elseif d < 196 then
-		return Enum.Material.Sand
-	elseif d < 480 then
-		return Enum.Material.Rock
-	elseif d < 560 then
-		return Enum.Material.Slate
-	else
-		return Enum.Material.Basalt
+local function groundBelow(pos, maxDrop)
+	local result = workspace:Raycast(pos, Vector3.new(0, -(maxDrop or 80), 0), terrainParams)
+	if result then
+		return result.Position, result.Normal
 	end
+	return nil
+end
+
+function WorldBuilder.RealFloorY(x, z)
+	local hit = groundBelow(Vector3.new(x, WorldBuilder.FloorY(x, z) + 40, z), 90)
+	return hit and hit.Y or WorldBuilder.FloorY(x, z)
+end
+
+-- A random spot for salvage between two depths: resting on a rock ledge,
+-- on the floor, or stuck to the wall.
+function WorldBuilder.LootSpot(minDepth, maxDepth)
+	for _ = 1, 25 do
+		local theta = rng:NextNumber(0, TAU)
+		local depth = rng:NextNumber(minDepth, maxDepth)
+		local wallR = WorldBuilder.ShaftRadius(depth)
+		local r = rng:NextNumber(wallR * 0.55, wallR - 6)
+		local start = Vector3.new(math.cos(theta) * r, S - depth, math.sin(theta) * r)
+		local ground = groundBelow(start, 70)
+		if ground and S - ground.Y <= maxDepth + 15 and S - ground.Y >= minDepth then
+			return ground + Vector3.new(0, 1.6, 0)
+		end
+		local wall, normal = wallHit(theta, depth)
+		if wall and normal then
+			return wall + normal * 1.8
+		end
+	end
+	return nil
 end
 
 ------------------------------------------------------------------------
 -- Terrain
 ------------------------------------------------------------------------
+local M = Enum.Material
+
+local function wallMaterial(depth, x, z, y)
+	if depth < 0 then
+		return M.Pavement
+	elseif depth < 30 then
+		return M.Rock
+	elseif depth < 200 then
+		return math.noise(x / 40, y / 25, z / 40) > 0.1 and M.Sandstone or M.Limestone
+	elseif depth < 216 then
+		return M.Rock
+	elseif depth < 420 then
+		return math.noise(x / 40, y / 30, z / 40) > 0.25 and M.Basalt or M.Slate
+	end
+	return M.Basalt
+end
+
 local function buildTerrain()
 	local terrain = workspace.Terrain
 	terrain:Clear()
-	-- realistic ocean water (waves, reflections, underwater blur)
 	pcall(function()
-		terrain.WaterColor = Color3.fromRGB(22, 92, 120)
-		terrain.WaterTransparency = 0.55
-		terrain.WaterReflectance = 0.6
-		terrain.WaterWaveSize = 0.25
-		terrain.WaterWaveSpeed = 10
+		terrain.WaterColor = Color3.fromRGB(18, 88, 112)
+		terrain.WaterTransparency = 0.5
+		terrain.WaterReflectance = 0.7
+		terrain.WaterWaveSize = 0.2
+		terrain.WaterWaveSpeed = 9
 	end)
-	-- Smooth terrain: write voxels with partial "occupancy" so the floor is
-	-- a smooth surface instead of big stepped blocks.
+
+	-- Open sea around the island, sandy seabed under it
+	terrain:FillBlock(CFrame.new(0, S - 13, 0), Vector3.new(2048, 6, 2048), M.Sand)
+	terrain:FillBlock(CFrame.new(0, S - 5, 0), Vector3.new(2048, 10, 2048), M.Water)
+	-- The island: beach ring, then grass
+	terrain:FillCylinder(CFrame.new(0, S - 9, 0), 20, 320, M.Sand)
+	terrain:FillCylinder(CFrame.new(0, S - 8.5, 0), 23, 300, M.Grass)
+	task.wait()
+
+	-- The Well itself, written voxel by voxel so the walls are smooth
 	local RES = 4
 	local CHUNK = 64
+	local MIN, MAX = -176, 208
+	local yTop = S + 16
+	local yBottom = S - 640
+	local ny = (yTop - yBottom) / RES
+	local n = CHUNK / RES
 	local count = 0
-
-	local function surfaceY(x, z)
-		local d = WorldBuilder.FloorDepth(x, z)
-		if d > 0 then
-			d += math.noise(x / 23, z / 23, 9.1) * 2.5 -- little ripples on the seabed
-		end
-		return S - d, d
-	end
-
-	for x0 = -520, 520 - CHUNK, CHUNK do
-		for z0 = -280, 940 - CHUNK, CHUNK do
-			local n = CHUNK / RES
-			local tops, depths, slopes = {}, {}, {}
-			local minTop, maxTop = math.huge, -math.huge
-			for ix = 1, n do
-				tops[ix], depths[ix], slopes[ix] = {}, {}, {}
-				local x = x0 + (ix - 0.5) * RES
-				for iz = 1, n do
-					local z = z0 + (iz - 0.5) * RES
-					local top, d = surfaceY(x, z)
-					local dx = surfaceY(x + RES, z) - surfaceY(x - RES, z)
-					local dz = surfaceY(x, z + RES) - surfaceY(x, z - RES)
-					tops[ix][iz] = top
-					depths[ix][iz] = d
-					slopes[ix][iz] = math.sqrt(dx * dx + dz * dz) / (2 * RES)
-					minTop = math.min(minTop, top)
-					maxTop = math.max(maxTop, top)
-				end
-			end
-			local y0 = math.floor((minTop - 24) / RES) * RES
-			local y1 = math.ceil((maxTop + 4) / RES) * RES
-			local ny = (y1 - y0) / RES
+	for x0 = MIN, MAX - CHUNK, CHUNK do
+		for z0 = MIN, MAX - CHUNK, CHUNK do
 			local materials, occupancy = {}, {}
 			for ix = 1, n do
+				local x = x0 + (ix - 0.5) * RES
 				materials[ix], occupancy[ix] = {}, {}
 				for iy = 1, ny do
-					local mRow, oRow = {}, {}
-					materials[ix][iy], occupancy[ix][iy] = mRow, oRow
-					local yBottom = y0 + (iy - 1) * RES
-					for iz = 1, n do
-						local top = tops[ix][iz]
-						local occ = math.clamp((top - yBottom) / RES, 0, 1)
-						local mat = Enum.Material.Air
-						if occ > 0 then
-							local d = depths[ix][iz]
-							mat = floorMaterial(d)
-							if slopes[ix][iz] > 0.9 and d > 0 then
-								mat = d < 300 and Enum.Material.Rock or Enum.Material.Slate
-							elseif d < -1 and slopes[ix][iz] > 0.6 then
-								mat = Enum.Material.Rock
-							end
-							if top - yBottom > 8 then
-								mat = d < 200 and Enum.Material.Sandstone or Enum.Material.Basalt -- deeper underground
+					materials[ix][iy], occupancy[ix][iy] = {}, {}
+				end
+				for iz = 1, n do
+					local z = z0 + (iz - 0.5) * RES
+					local dist = math.sqrt(x * x + z * z)
+					local theta = math.atan2(z, x)
+					local floorY = WorldBuilder.FloorY(x, z)
+					local landTop = S + 3
+					for iy = 1, ny do
+						local vy = yBottom + (iy - 1) * RES
+						local depth = S - (vy + RES / 2)
+						local base = WorldBuilder.ShaftRadius(depth)
+						local occWall
+						if dist > base + 45 then
+							occWall = 1
+						elseif dist < base - 22 then
+							occWall = 0
+						else
+							occWall = math.clamp((dist - WorldBuilder.WallRadius(theta, depth)) / RES + 0.5, 0, 1)
+						end
+						if vy >= S - RES then
+							-- above the sea: land only up to the plaza level
+							occWall = math.min(occWall, math.clamp((landTop - vy) / RES, 0, 1))
+						end
+						local occFloor = math.clamp((floorY - vy) / RES, 0, 1)
+						local occ = math.max(occWall, occFloor)
+						local mat
+						if occ <= 0 then
+							mat = M.Air
+						elseif occFloor >= occWall then
+							mat = (math.noise(x / 25, z / 25) > 0) and M.Mud or M.Sand
+						else
+							mat = wallMaterial(depth, x, z, vy)
+							if depth < 0 and dist > 185 then
+								mat = M.Grass
 							end
 						end
-						-- below sea level, empty space becomes real ocean water
-						if yBottom + RES <= S and occ < 0.5 then
-							mat = Enum.Material.Water
+						if vy + RES <= S and occ < 0.5 then
+							mat = M.Water -- the Well is full of real water
 							occ = 1
 						end
-						mRow[iz] = mat
-						oRow[iz] = occ
+						materials[ix][iy][iz] = mat
+						occupancy[ix][iy][iz] = occ
 					end
 				end
 			end
-			local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x0 + CHUNK, y1, z0 + CHUNK))
+			local region = Region3.new(Vector3.new(x0, yBottom, z0), Vector3.new(x0 + CHUNK, yTop, z0 + CHUNK))
 			terrain:WriteVoxels(region, RES, materials, occupancy)
-			-- fill the rest of this column with water up to the surface
-			if y1 < S then
-				terrain:FillBlock(
-					CFrame.new(x0 + CHUNK / 2, (y1 + S) / 2, z0 + CHUNK / 2),
-					Vector3.new(CHUNK, S - y1, CHUNK),
-					Enum.Material.Water
-				)
-			end
 			count += 1
-			if count % 8 == 0 then
-				task.wait()
-			end
+			task.wait()
 		end
 	end
+	_ = count
 
-	-- Boulders on the reef and in the twilight zone
-	for _ = 1, 140 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(-60, 290)
-		local d = WorldBuilder.FloorDepth(x, z)
-		terrain:FillBall(Vector3.new(x, S - d, z), rng:NextNumber(5, 12), Enum.Material.Rock)
+	-- Boulders on the floor
+	for _ = 1, 26 do
+		local a = rng:NextNumber(0, TAU)
+		local r = rng:NextNumber(20, 78)
+		local x, z = math.cos(a) * r, math.sin(a) * r
+		terrain:FillBall(Vector3.new(x, WorldBuilder.FloorY(x, z), z), rng:NextNumber(3, 8), M.Basalt)
 	end
-	for _ = 1, 90 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(420, 840)
-		local d = WorldBuilder.FloorDepth(x, z)
-		terrain:FillBall(Vector3.new(x, S - d, z), rng:NextNumber(7, 18), Enum.Material.Basalt)
-	end
-	task.wait()
 end
 
 ------------------------------------------------------------------------
--- Dock / home base
+-- Harbor town
 ------------------------------------------------------------------------
 local DOCK_TOP = S + 4
+local BOARD_IN, BOARD_OUT = 119, 135
 local BERTH_COUNT = 8
+local WOOD = Color3.fromRGB(122, 88, 58)
+local DARK_WOOD = Color3.fromRGB(78, 54, 36)
+local IRON = Color3.fromRGB(38, 40, 46)
 
-local function buildDock(root)
+local function lampPost(parent, cf, height)
+	height = height or 10
+	part({
+		Name = "LampPost",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(height, 0.45, 0.45),
+		CFrame = cf * CFrame.new(0, height / 2, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		Material = M.Metal,
+		Color = IRON,
+		Parent = parent,
+	})
+	part({
+		Name = "LampArm",
+		Size = Vector3.new(1.6, 0.25, 0.25),
+		CFrame = cf * CFrame.new(-0.6, height - 0.4, 0),
+		Material = M.Metal,
+		Color = IRON,
+		Parent = parent,
+	})
+	local bulb = deco({
+		Name = "Lamp",
+		Size = Vector3.new(0.9, 1.2, 0.9),
+		CFrame = cf * CFrame.new(-1.3, height - 1, 0),
+		Material = M.Neon,
+		Color = Color3.fromRGB(255, 214, 150),
+		Mesh = SPHERE,
+		Parent = parent,
+	})
+	deco({
+		Name = "LampCap",
+		Size = Vector3.new(1.3, 0.5, 1.3),
+		CFrame = cf * CFrame.new(-1.3, height - 0.35, 0),
+		Material = M.Metal,
+		Color = IRON,
+		Mesh = SPHERE,
+		Parent = parent,
+	})
+	light(bulb, 22, 1.4, Color3.fromRGB(255, 210, 150), false)
+	return bulb
+end
+
+local function palmTree(parent, pos)
+	local lean = rng:NextNumber(0, TAU)
+	local leanDir = Vector3.new(math.cos(lean), 0, math.sin(lean))
+	local p = pos
+	local segH = 3
+	for i = 1, 6 do
+		local nextP = p + Vector3.new(0, segH, 0) + leanDir * (0.25 * i)
+		deco({
+			Name = "PalmTrunk",
+			Size = Vector3.new(1.3 - i * 0.08, (nextP - p).Magnitude + 0.3, 1.3 - i * 0.08),
+			CFrame = CFrame.lookAt((p + nextP) / 2, nextP) * CFrame.Angles(math.rad(90), 0, 0),
+			Material = M.Wood,
+			Color = Color3.fromRGB(140 - i * 5, 110 - i * 4, 75),
+			Mesh = SPHERE,
+			CastShadow = true,
+			Parent = parent,
+		})
+		p = nextP
+	end
+	for i = 1, 7 do
+		local a = i / 7 * TAU
+		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+		local frondCenter = p + dir * 3.2 + Vector3.new(0, -0.6, 0)
+		deco({
+			Name = "PalmFrond",
+			Size = Vector3.new(1.6, 0.18, 7.5),
+			CFrame = CFrame.lookAt(frondCenter, frondCenter + dir) * CFrame.Angles(math.rad(-18), 0, 0),
+			Material = M.Grass,
+			Color = Color3.fromRGB(70, rng:NextInteger(140, 165), 55),
+			Mesh = SPHERE,
+			CastShadow = true,
+			Sway = 2,
+			Parent = parent,
+		})
+	end
+	deco({
+		Name = "Coconuts",
+		Size = Vector3.new(1.4, 1, 1.4),
+		CFrame = CFrame.new(p - Vector3.new(0, 0.6, 0)),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(95, 70, 40),
+		Mesh = SPHERE,
+		Parent = parent,
+	})
+end
+
+local function container(parent, cf, color)
+	part({
+		Name = "Container",
+		Size = Vector3.new(8, 8.5, 20),
+		CFrame = cf,
+		Material = M.CorrodedMetal,
+		Color = color,
+		Parent = parent,
+	})
+	for i = -4, 4 do
+		deco({
+			Name = "Rib",
+			Size = Vector3.new(8.2, 8.1, 0.25),
+			CFrame = cf * CFrame.new(0, 0, i * 2.2),
+			Material = M.Metal,
+			Color = color:Lerp(Color3.new(0, 0, 0), 0.25),
+			Parent = parent,
+		})
+	end
+end
+
+local function building(parent, cf, w, d, h, wallColor, roofColor, label)
+	-- cf: centre of the floor, -X faces the Well
+	local model = Instance.new("Model")
+	model.Name = label or "Building"
+	model.Parent = parent
+	part({
+		Name = "Walls",
+		Size = Vector3.new(d, h, w),
+		CFrame = cf * CFrame.new(0, h / 2, 0),
+		Material = M.Brick,
+		Color = wallColor,
+		Parent = model,
+	})
+	part({
+		Name = "Roof",
+		Size = Vector3.new(d + 2, 1, w + 2),
+		CFrame = cf * CFrame.new(0, h + 0.5, 0),
+		Material = M.Slate,
+		Color = roofColor,
+		Parent = model,
+	})
+	part({
+		Name = "RoofTrim",
+		Size = Vector3.new(d + 2.4, 0.4, w + 2.4),
+		CFrame = cf * CFrame.new(0, h, 0),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(235, 235, 230),
+		Parent = model,
+	})
+	part({
+		Name = "Door",
+		Size = Vector3.new(0.3, h * 0.6, w * 0.35),
+		CFrame = cf * CFrame.new(-d / 2 - 0.1, h * 0.3, 0),
+		Material = M.Metal,
+		Color = IRON,
+		Parent = model,
+	})
+	for _, z in ipairs({ -w * 0.35, w * 0.35 }) do
+		local win = deco({
+			Name = "Window",
+			Size = Vector3.new(0.2, h * 0.25, w * 0.15),
+			CFrame = cf * CFrame.new(-d / 2 - 0.1, h * 0.62, z),
+			Material = M.Neon,
+			Color = Color3.fromRGB(255, 220, 160),
+			Parent = model,
+		})
+		_ = win
+	end
+	if label then
+		local sign = part({
+			Name = "Sign",
+			Size = Vector3.new(0.3, 3, w * 0.6),
+			CFrame = cf * CFrame.new(-d / 2 - 0.3, h - 2, 0),
+			Material = M.SmoothPlastic,
+			Color = Color3.fromRGB(20, 30, 50),
+			Parent = model,
+		})
+		surfaceText(sign, Enum.NormalId.Left, label, Color3.fromRGB(255, 220, 120), 30)
+	end
+	return model
+end
+
+local function buildHarbor(root)
 	local dock = Instance.new("Folder")
 	dock.Name = "Dock"
 	dock.Parent = root
 
-	local wood = Color3.fromRGB(120, 85, 55)
-	local darkWood = Color3.fromRGB(85, 58, 38)
-
-	-- Main deck
-	part({
-		Name = "Deck",
-		Size = Vector3.new(520, 2, 64),
-		CFrame = CFrame.new(0, DOCK_TOP - 1, -162),
-		Material = Enum.Material.WoodPlanks,
-		Color = wood,
-		Parent = dock,
-	})
-	-- Deck edge trim
-	part({
-		Name = "Trim",
-		Size = Vector3.new(520, 1, 1),
-		CFrame = CFrame.new(0, DOCK_TOP - 1.5, -130),
-		Material = Enum.Material.Wood,
-		Color = darkWood,
-		Parent = dock,
-	})
-	-- Support pylons
-	for x = -250, 250, 25 do
-		for _, z in ipairs({ -132, -192 }) do
-			local floorY = WorldBuilder.FloorY(x, z)
-			local len = DOCK_TOP - floorY + 4
+	-- Round boardwalk
+	local N = 64
+	local midR = (BOARD_IN + BOARD_OUT) / 2
+	local width = BOARD_OUT - BOARD_IN
+	for i = 0, N - 1 do
+		local a = i / N * TAU
+		local arc = TAU * BOARD_OUT / N + 0.4
+		part({
+			Name = "Boardwalk",
+			Size = Vector3.new(width, 1.2, arc),
+			CFrame = radial(midR, a, DOCK_TOP - 0.6),
+			Material = M.WoodPlanks,
+			Color = (i % 2 == 0) and WOOD or WOOD:Lerp(DARK_WOOD, 0.15),
+			Parent = dock,
+		})
+		deco({
+			Name = "EdgeBeam",
+			Size = Vector3.new(0.8, 1.6, TAU * BOARD_IN / N + 0.3),
+			CFrame = radial(BOARD_IN + 0.4, a, DOCK_TOP - 1),
+			Material = M.Wood,
+			Color = DARK_WOOD,
+			Parent = dock,
+		})
+		if i % 2 == 0 then
 			deco({
 				Name = "Pylon",
 				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(len, 2.4, 2.4),
-				CFrame = CFrame.new(x, DOCK_TOP - len / 2 - 1, z) * CFrame.Angles(0, 0, math.rad(90)),
-				Material = Enum.Material.Wood,
-				Color = darkWood,
+				Size = Vector3.new(26, 1.6, 1.6),
+				CFrame = radial(BOARD_IN + 1.2, a, DOCK_TOP - 13) * CFrame.Angles(0, 0, math.rad(90)),
+				Material = M.Wood,
+				Color = DARK_WOOD,
 				Parent = dock,
 			})
 		end
 	end
 
-	-- Spawn
+	-- Berths: piers pointing into the Well
+	local berths = {}
+	local pierLen = 26
+	for i = 1, BERTH_COUNT do
+		local a = (i - 1) / BERTH_COUNT * TAU + TAU / 16
+		local pierMid = BOARD_IN - pierLen / 2 + 0.5
+		local pier = part({
+			Name = "Pier" .. i,
+			Size = Vector3.new(pierLen, 1.2, 7),
+			CFrame = radial(pierMid, a, DOCK_TOP - 0.6),
+			Material = M.WoodPlanks,
+			Color = WOOD,
+			Parent = dock,
+		})
+		for _, off in ipairs({ -pierLen / 2 + 2, 0, pierLen / 2 - 2 }) do
+			for _, side in ipairs({ -3.2, 3.2 }) do
+				deco({
+					Name = "PierPost",
+					Shape = Enum.PartType.Cylinder,
+					Size = Vector3.new(18, 1.2, 1.2),
+					CFrame = radial(pierMid, a, DOCK_TOP - 1)
+						* CFrame.new(off, -8, side)
+						* CFrame.Angles(0, 0, math.rad(90)),
+					Material = M.Wood,
+					Color = DARK_WOOD,
+					Parent = dock,
+				})
+			end
+		end
+		-- rope rails along the pier
+		for _, side in ipairs({ -3.3, 3.3 }) do
+			deco({
+				Name = "Rope",
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(pierLen - 1, 0.18, 0.18),
+				CFrame = radial(pierMid, a, DOCK_TOP + 2.2) * CFrame.new(0, 0, side),
+				Material = M.Fabric,
+				Color = Color3.fromRGB(200, 180, 140),
+				Parent = dock,
+			})
+			for _, off in ipairs({ -pierLen / 2 + 1, -pierLen / 4, 0, pierLen / 4, pierLen / 2 - 1 }) do
+				part({
+					Name = "RailPost",
+					Size = Vector3.new(0.4, 2.6, 0.4),
+					CFrame = radial(pierMid, a, DOCK_TOP + 1.3) * CFrame.new(off, 0, side),
+					Material = M.Wood,
+					Color = DARK_WOOD,
+					Parent = dock,
+				})
+			end
+		end
+		-- bollards and a life ring
+		for _, off in ipairs({ -pierLen / 2 + 3, pierLen / 2 - 6 }) do
+			part({
+				Name = "Bollard",
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(1.4, 1.3, 1.3),
+				CFrame = radial(pierMid, a, DOCK_TOP + 0.7)
+					* CFrame.new(off, 0, 2.4)
+					* CFrame.Angles(0, 0, math.rad(90)),
+				Material = M.Metal,
+				Color = IRON,
+				Parent = dock,
+			})
+		end
+		deco({
+			Name = "LifeRing",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.4, 2.2, 2.2),
+			CFrame = radial(pierMid, a, DOCK_TOP + 1.6) * CFrame.new(2, 0, -3.5) * CFrame.Angles(0, math.rad(90), 0),
+			Material = M.SmoothPlastic,
+			Color = Color3.fromRGB(240, 110, 40),
+			Parent = dock,
+		})
+		-- light at the end of the pier (gold when the berth is owned)
+		local tip = lampPost(dock, radial(BOARD_IN - pierLen + 1.5, a, DOCK_TOP) * CFrame.new(0, 0, -3), 7)
+		-- berth sign
+		local board = part({
+			Name = "BerthSign",
+			Size = Vector3.new(0.4, 2.6, 8),
+			CFrame = radial(BOARD_IN + 3, a, DOCK_TOP + 5.4) * CFrame.new(0, 0, 0),
+			Material = M.SmoothPlastic,
+			Color = Color3.fromRGB(22, 36, 64),
+			Parent = dock,
+		})
+		for _, side in ipairs({ -3.5, 3.5 }) do
+			part({
+				Name = "SignPost",
+				Size = Vector3.new(0.4, 5.5, 0.4),
+				CFrame = radial(BOARD_IN + 3, a, DOCK_TOP + 2.75) * CFrame.new(0, 0, side),
+				Material = M.Wood,
+				Color = DARK_WOOD,
+				Parent = dock,
+			})
+		end
+		local l1 = surfaceText(board, Enum.NormalId.Left, "BERTH " .. i .. "\nfree", Color3.new(1, 1, 1), 30)
+		local l2 = surfaceText(board, Enum.NormalId.Right, "BERTH " .. i .. "\nfree", Color3.new(1, 1, 1), 30)
+		-- the sub floats beside the pier, nose pointing into the Well
+		local subR = BOARD_IN - pierLen / 2 - 6
+		local subPos = radial(subR, a, S + 0.5) * Vector3.new(0, 0, 12)
+		local inward = -Vector3.new(math.cos(a), 0, math.sin(a))
+		table.insert(berths, {
+			Index = i,
+			SubCFrame = CFrame.lookAt(subPos, subPos + inward),
+			ExitCFrame = radial(BOARD_IN - 6, a, DOCK_TOP + 3),
+			Labels = { l1, l2 },
+			Marker = tip,
+			Pier = pier,
+		})
+	end
+	WorldBuilder.Berths = berths
+
+	-- Lamp posts around the boardwalk
+	for i = 0, 15 do
+		local a = i / 16 * TAU
+		lampPost(dock, radial(BOARD_OUT - 1, a, DOCK_TOP), 11)
+	end
+
+	-- Spawn plaza (in front of the shop)
+	local spawnCF = radial(146, 0.18, DOCK_TOP - 0.5)
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "DockSpawn"
 	spawn.Anchored = true
-	spawn.Size = Vector3.new(14, 1, 14)
-	spawn.CFrame = CFrame.new(0, DOCK_TOP + 0.5, -150)
+	spawn.Size = Vector3.new(10, 1, 10)
+	spawn.CFrame = spawnCF
 	spawn.Neutral = true
 	spawn.Duration = 0
-	spawn.Material = Enum.Material.SmoothPlastic
-	spawn.Color = Color3.fromRGB(40, 180, 200)
+	spawn.Material = M.Cobblestone
+	spawn.Color = Color3.fromRGB(120, 120, 125)
 	spawn.TopSurface = Enum.SurfaceType.Smooth
 	spawn.Parent = dock
 	local decal = spawn:FindFirstChildOfClass("Decal")
 	if decal then
 		decal:Destroy()
 	end
+	WorldBuilder.SpawnCFrame = spawnCF * CFrame.new(0, 3.5, 0)
 
-	-- Berths (one per player)
-	local berths = {}
-	for i = 1, BERTH_COUNT do
-		local x = -245 + (i - 1) * 70
-		local pier = part({
-			Name = "Pier" .. i,
-			Size = Vector3.new(7, 1.6, 40),
-			CFrame = CFrame.new(x, DOCK_TOP - 0.8, -112),
-			Material = Enum.Material.WoodPlanks,
-			Color = wood,
-			Parent = dock,
-		})
-		for _, z in ipairs({ -98, -112 }) do
-			local floorY = WorldBuilder.FloorY(x, z)
-			local len = DOCK_TOP - floorY + 3
-			deco({
-				Name = "PierPost",
-				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(len, 1.6, 1.6),
-				CFrame = CFrame.new(x + 3.2, DOCK_TOP - len / 2, z) * CFrame.Angles(0, 0, math.rad(90)),
-				Material = Enum.Material.Wood,
-				Color = darkWood,
-				Parent = dock,
-			})
-		end
-		-- Bollard
-		part({
-			Name = "Bollard",
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(1.6, 1.4, 1.4),
-			CFrame = CFrame.new(x + 2.4, DOCK_TOP + 0.8, -96) * CFrame.Angles(0, 0, math.rad(90)),
-			Material = Enum.Material.Metal,
-			Color = Color3.fromRGB(60, 60, 70),
-			Parent = dock,
-		})
-		-- Sign
-		local post = part({
-			Name = "SignPost",
-			Size = Vector3.new(0.6, 6, 0.6),
-			CFrame = CFrame.new(x - 3, DOCK_TOP + 3, -128),
-			Material = Enum.Material.Wood,
-			Color = darkWood,
-			Parent = dock,
-		})
-		local board = part({
-			Name = "BerthSign",
-			Size = Vector3.new(8, 2.6, 0.4),
-			CFrame = CFrame.new(x - 3, DOCK_TOP + 6.4, -128) * CFrame.Angles(0, math.pi, 0),
-			Material = Enum.Material.SmoothPlastic,
-			Color = Color3.fromRGB(25, 40, 70),
-			Parent = dock,
-		})
-		local label = surfaceText(board, Enum.NormalId.Front, "BERTH " .. i .. "\nfree", Color3.new(1, 1, 1), nil, 30)
-		local label2 = surfaceText(board, Enum.NormalId.Back, "BERTH " .. i .. "\nfree", Color3.new(1, 1, 1), nil, 30)
-		_ = post
-		-- Glowing berth marker in the water
-		local marker = deco({
-			Name = "BerthGlow",
-			Size = Vector3.new(14, 0.2, 30),
-			CFrame = CFrame.new(x + 12, S + 0.62, -102),
-			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(60, 200, 255),
-			Transparency = 0.75,
-			Parent = dock,
-		})
-		table.insert(berths, {
-			Index = i,
-			-- sub floats half in the water, nose pointing out to sea (+Z)
-			SubCFrame = CFrame.new(x + 12, S + 0.5, -102) * CFrame.Angles(0, math.pi, 0),
-			ExitCFrame = CFrame.new(x, DOCK_TOP + 3, -118),
-			Labels = { label, label2 },
-			Marker = marker,
-			Pier = pier,
-		})
-	end
-	WorldBuilder.Berths = berths
-
-	-- Lamp posts
-	for x = -240, 240, 40 do
-		part({
-			Name = "LampPost",
-			Size = Vector3.new(0.5, 9, 0.5),
-			CFrame = CFrame.new(x, DOCK_TOP + 4.5, -133),
-			Material = Enum.Material.Metal,
-			Color = Color3.fromRGB(40, 40, 45),
-			Parent = dock,
-		})
-		local bulb = deco({
-			Name = "Lamp",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.4, 1.4, 1.4),
-			CFrame = CFrame.new(x, DOCK_TOP + 9.4, -133),
-			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(255, 220, 150),
-			Parent = dock,
-		})
-		local light = Instance.new("PointLight")
-		light.Range = 18
-		light.Brightness = 1.2
-		light.Color = Color3.fromRGB(255, 220, 160)
-		light.Parent = bulb
-	end
-
-	-- Crates and barrels
-	for _ = 1, 26 do
-		local x = rng:NextNumber(-250, 250)
-		local z = rng:NextNumber(-188, -176)
-		if math.abs(x) > 30 then
-			if rng:NextNumber() < 0.5 then
-				local s = rng:NextNumber(2.5, 4)
-				part({
-					Name = "Crate",
-					Size = Vector3.new(s, s, s),
-					CFrame = CFrame.new(x, DOCK_TOP + s / 2, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
-					Material = Enum.Material.WoodPlanks,
-					Color = Color3.fromRGB(160, 120, 70),
-					Parent = dock,
-				})
-			else
-				part({
-					Name = "Barrel",
-					Shape = Enum.PartType.Cylinder,
-					Size = Vector3.new(3.2, 2.4, 2.4),
-					CFrame = CFrame.new(x, DOCK_TOP + 1.6, z) * CFrame.Angles(0, 0, math.rad(90)),
-					Material = Enum.Material.Metal,
-					Color = rng:NextNumber() < 0.5 and Color3.fromRGB(180, 60, 40) or Color3.fromRGB(50, 110, 160),
-					Parent = dock,
-				})
-			end
-		end
-	end
-
-	-- Shop hut
-	local hut = Instance.new("Model")
-	hut.Name = "ShopHut"
-	hut.Parent = dock
-	local hx, hz = 0, -178
-	part({
-		Name = "Floor",
-		Size = Vector3.new(26, 0.4, 18),
-		CFrame = CFrame.new(hx, DOCK_TOP + 0.2, hz),
-		Material = Enum.Material.WoodPlanks,
-		Color = Color3.fromRGB(150, 110, 70),
-		Parent = hut,
-	})
-	part({
-		Name = "BackWall",
-		Size = Vector3.new(26, 12, 1),
-		CFrame = CFrame.new(hx, DOCK_TOP + 6, hz - 9),
-		Material = Enum.Material.WoodPlanks,
-		Color = Color3.fromRGB(70, 130, 160),
-		Parent = hut,
-	})
-	for _, side in ipairs({ -1, 1 }) do
-		part({
-			Name = "SideWall",
-			Size = Vector3.new(1, 12, 18),
-			CFrame = CFrame.new(hx + side * 13, DOCK_TOP + 6, hz),
-			Material = Enum.Material.WoodPlanks,
-			Color = Color3.fromRGB(70, 130, 160),
-			Parent = hut,
-		})
-	end
-	part({
-		Name = "Roof",
-		Size = Vector3.new(30, 1, 22),
-		CFrame = CFrame.new(hx, DOCK_TOP + 12.5, hz + 1) * CFrame.Angles(math.rad(-8), 0, 0),
-		Material = Enum.Material.Slate,
-		Color = Color3.fromRGB(180, 60, 50),
-		Parent = hut,
-	})
+	-- Salvage shop
+	local shopCF = radial(160, 0, DOCK_TOP - 1)
+	local shop = building(dock, shopCF, 26, 16, 12, Color3.fromRGB(70, 130, 160), Color3.fromRGB(170, 55, 45), nil)
+	shop.Name = "ShopHut"
 	local counter = part({
 		Name = "Counter",
-		Size = Vector3.new(16, 3.5, 3),
-		CFrame = CFrame.new(hx, DOCK_TOP + 1.75, hz + 4),
-		Material = Enum.Material.Wood,
-		Color = Color3.fromRGB(110, 75, 45),
-		Parent = hut,
+		Size = Vector3.new(3, 3.6, 14),
+		CFrame = shopCF * CFrame.new(-10, 1.8, 0),
+		Material = M.Wood,
+		Color = DARK_WOOD,
+		Parent = shop,
 	})
-	local sign = part({
+	-- striped awning
+	for i = -3, 3 do
+		deco({
+			Name = "Awning",
+			Size = Vector3.new(6, 0.3, 3.6),
+			CFrame = shopCF * CFrame.new(-10.5, 10.2, i * 3.6) * CFrame.Angles(0, 0, math.rad(-18)),
+			Material = M.Fabric,
+			Color = (i % 2 == 0) and Color3.fromRGB(240, 240, 235) or Color3.fromRGB(210, 60, 50),
+			Parent = shop,
+		})
+	end
+	local shopSign = part({
 		Name = "ShopSign",
-		Size = Vector3.new(22, 4, 0.5),
-		CFrame = CFrame.new(hx, DOCK_TOP + 14.5, hz + 9.5),
-		Material = Enum.Material.SmoothPlastic,
+		Size = Vector3.new(0.4, 4, 20),
+		CFrame = shopCF * CFrame.new(-8.3, 14.6, 0),
+		Material = M.SmoothPlastic,
 		Color = Color3.fromRGB(20, 30, 50),
-		Parent = hut,
+		Parent = shop,
 	})
-	surfaceText(sign, Enum.NormalId.Back, "SALVAGE SHOP", Color3.fromRGB(255, 210, 80), nil, 30)
+	surfaceText(shopSign, Enum.NormalId.Left, "SALVAGE SHOP", Color3.fromRGB(255, 210, 80), 30)
+	light(shopSign, 18, 1, Color3.fromRGB(255, 220, 150), false)
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.Name = "ShopPrompt"
 	prompt.ActionText = "Open Shop"
@@ -1103,48 +1321,46 @@ local function buildDock(root)
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = counter
 	WorldBuilder.ShopPrompt = prompt
-	-- Shopkeeper's lantern
-	local lantern = deco({
-		Name = "Lantern",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(1.5, 1.5, 1.5),
-		CFrame = CFrame.new(hx, DOCK_TOP + 10, hz + 6),
-		Material = Enum.Material.Neon,
-		Color = Color3.fromRGB(255, 200, 120),
-		Parent = hut,
-	})
-	local ll = Instance.new("PointLight")
-	ll.Range = 20
-	ll.Color = Color3.fromRGB(255, 210, 150)
-	ll.Parent = lantern
+	for _, z in ipairs({ -5, 0, 5 }) do
+		deco({
+			Name = "Goods",
+			Size = Vector3.new(1.4, 1.2, 1.4),
+			CFrame = shopCF * CFrame.new(-10, 4.2, z),
+			Material = M.Foil,
+			Color = Color3.fromRGB(255, 200, 70),
+			Mesh = SPHERE,
+			Parent = shop,
+		})
+	end
 
 	-- Depth leaderboard
+	local boardCF = radial(150, 0.55, DOCK_TOP - 1)
 	local boardPart = part({
 		Name = "DepthBoard",
-		Size = Vector3.new(18, 13, 0.6),
-		CFrame = CFrame.new(-45, DOCK_TOP + 8, -186),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(15, 22, 40),
+		Size = Vector3.new(0.6, 12, 17),
+		CFrame = boardCF * CFrame.new(0, 8, 0),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(14, 20, 38),
 		Parent = dock,
 	})
-	for _, side in ipairs({ -1, 1 }) do
+	for _, z in ipairs({ -7.5, 7.5 }) do
 		part({
 			Name = "BoardLeg",
 			Size = Vector3.new(0.6, 8, 0.6),
-			CFrame = CFrame.new(-45 + side * 8, DOCK_TOP + 1, -186),
-			Material = Enum.Material.Metal,
-			Color = Color3.fromRGB(50, 50, 60),
+			CFrame = boardCF * CFrame.new(0, 2, z),
+			Material = M.Metal,
+			Color = IRON,
 			Parent = dock,
 		})
 	end
 	local gui = Instance.new("SurfaceGui")
-	gui.Face = Enum.NormalId.Back
+	gui.Face = Enum.NormalId.Left
 	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
 	gui.PixelsPerStud = 30
 	gui.LightInfluence = 0
 	gui.Parent = boardPart
 	local title = Instance.new("TextLabel")
-	title.Size = UDim2.new(1, 0, 0.16, 0)
+	title.Size = UDim2.fromScale(1, 0.16)
 	title.BackgroundTransparency = 1
 	title.Font = Enum.Font.FredokaOne
 	title.TextScaled = true
@@ -1153,8 +1369,8 @@ local function buildDock(root)
 	title.Parent = gui
 	local list = Instance.new("TextLabel")
 	list.Name = "List"
-	list.Position = UDim2.new(0.06, 0, 0.18, 0)
-	list.Size = UDim2.new(0.88, 0, 0.78, 0)
+	list.Position = UDim2.fromScale(0.06, 0.18)
+	list.Size = UDim2.fromScale(0.88, 0.78)
 	list.BackgroundTransparency = 1
 	list.Font = Enum.Font.GothamBold
 	list.TextScaled = true
@@ -1166,34 +1382,160 @@ local function buildDock(root)
 	WorldBuilder.LeaderboardLabel = list
 
 	-- Welcome sign
+	local welcomeCF = radial(150, -0.55, DOCK_TOP - 1)
 	local welcome = part({
 		Name = "WelcomeSign",
-		Size = Vector3.new(18, 6, 0.5),
-		CFrame = CFrame.new(45, DOCK_TOP + 8, -186),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(15, 22, 40),
+		Size = Vector3.new(0.6, 7, 18),
+		CFrame = welcomeCF * CFrame.new(0, 7, 0),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(14, 20, 38),
 		Parent = dock,
 	})
+	for _, z in ipairs({ -8, 8 }) do
+		part({
+			Name = "SignLeg",
+			Size = Vector3.new(0.6, 5, 0.6),
+			CFrame = welcomeCF * CFrame.new(0, 2, z),
+			Material = M.Metal,
+			Color = IRON,
+			Parent = dock,
+		})
+	end
 	surfaceText(
 		welcome,
-		Enum.NormalId.Back,
-		"DEEP DIVE\nBoard your sub - dive - salvage - SURFACE to cash in!",
+		Enum.NormalId.Left,
+		"THE WELL\n600 m straight down.\nBoard your sub - salvage - SURFACE to cash in!",
 		Color3.fromRGB(255, 230, 140),
-		nil,
 		30
 	)
 
-	-- Lighthouse on the shore
-	local lx, lz = 300, -220
-	local baseY = WorldBuilder.FloorY(lx, lz)
-	for i = 0, 5 do
+	-- Warehouses + containers
+	local palette = {
+		Color3.fromRGB(180, 60, 45),
+		Color3.fromRGB(40, 100, 160),
+		Color3.fromRGB(60, 140, 80),
+		Color3.fromRGB(220, 160, 40),
+	}
+	for i, a in ipairs({ 1.6, 3.15, 4.7 }) do
+		local cf = radial(178, a, DOCK_TOP - 1)
+		building(dock, cf, 40, 22, 16, Color3.fromRGB(150, 150, 155), Color3.fromRGB(70, 80, 95), "WAREHOUSE " .. i)
+		for c = 0, 2 do
+			local ccf = radial(150, a + 0.22 + c * 0.07, DOCK_TOP + 3.25) * CFrame.Angles(0, math.rad(90), 0)
+			container(dock, ccf, palette[(i + c) % #palette + 1])
+			if c == 1 then
+				container(dock, ccf * CFrame.new(0, 8.5, 0), palette[(i + c + 1) % #palette + 1])
+			end
+		end
+	end
+
+	-- Dock crane leaning over the water
+	local craneA = 2.35
+	local craneCF = radial(BOARD_IN + 8, craneA, DOCK_TOP)
+	local yellow = Color3.fromRGB(240, 185, 30)
+	for _, x in ipairs({ -2.5, 2.5 }) do
+		for _, z in ipairs({ -2.5, 2.5 }) do
+			part({
+				Name = "CraneLeg",
+				Size = Vector3.new(0.8, 30, 0.8),
+				CFrame = craneCF * CFrame.new(x, 15, z),
+				Material = M.Metal,
+				Color = yellow,
+				Parent = dock,
+			})
+		end
+	end
+	for h = 6, 28, 6 do
+		part({
+			Name = "CraneBrace",
+			Size = Vector3.new(5.8, 0.5, 5.8),
+			CFrame = craneCF * CFrame.new(0, h, 0),
+			Material = M.Metal,
+			Color = yellow,
+			Parent = dock,
+		})
+	end
+	part({
+		Name = "CraneCab",
+		Size = Vector3.new(6, 4, 6),
+		CFrame = craneCF * CFrame.new(0, 32, 0),
+		Material = M.Metal,
+		Color = yellow,
+		Parent = dock,
+	})
+	part({
+		Name = "CraneBoom",
+		Size = Vector3.new(34, 1.2, 1.6),
+		CFrame = craneCF * CFrame.new(-15, 33.5, 0),
+		Material = M.Metal,
+		Color = yellow,
+		Parent = dock,
+	})
+	deco({
+		Name = "CraneCable",
+		Size = Vector3.new(0.15, 18, 0.15),
+		CFrame = craneCF * CFrame.new(-30, 24.5, 0),
+		Material = M.Metal,
+		Color = IRON,
+		Parent = dock,
+	})
+	part({
+		Name = "CraneHook",
+		Size = Vector3.new(1.4, 1.6, 1.4),
+		CFrame = craneCF * CFrame.new(-30, 15, 0),
+		Material = M.Metal,
+		Color = IRON,
+		Mesh = SPHERE,
+		Parent = dock,
+	})
+
+	-- Crates, barrels, benches scattered on the plaza
+	for _ = 1, 30 do
+		local a = rng:NextNumber(0, TAU)
+		local r = rng:NextNumber(139, 146)
+		if angleDiff(a, 0) > 0.3 and angleDiff(a, 0.55) > 0.15 and angleDiff(a, -0.55) > 0.15 then
+			local cf = radial(r, a, DOCK_TOP - 1) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+			if rng:NextNumber() < 0.5 then
+				local s = rng:NextNumber(2.4, 3.6)
+				part({
+					Name = "Crate",
+					Size = Vector3.new(s, s, s),
+					CFrame = cf * CFrame.new(0, s / 2, 0),
+					Material = M.WoodPlanks,
+					Color = Color3.fromRGB(165, 125, 75),
+					Parent = dock,
+				})
+			else
+				part({
+					Name = "Barrel",
+					Shape = Enum.PartType.Cylinder,
+					Size = Vector3.new(3.2, 2.4, 2.4),
+					CFrame = cf * CFrame.new(0, 1.6, 0) * CFrame.Angles(0, 0, math.rad(90)),
+					Material = M.Metal,
+					Color = rng:NextNumber() < 0.5 and Color3.fromRGB(175, 60, 40) or Color3.fromRGB(45, 105, 155),
+					Parent = dock,
+				})
+			end
+		end
+	end
+
+	-- Palm trees on the grass
+	for _ = 1, 22 do
+		local a = rng:NextNumber(0, TAU)
+		local r = rng:NextNumber(205, 285)
+		palmTree(dock, Vector3.new(math.cos(a) * r, S + 3.3, math.sin(a) * r))
+	end
+
+	-- Lighthouse
+	local lhPos = Vector3.new(math.cos(3.9) * 255, S + 3, math.sin(3.9) * 255)
+	for i = 0, 6 do
 		part({
 			Name = "Lighthouse",
 			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(7, 9 - i * 0.6, 9 - i * 0.6),
-			CFrame = CFrame.new(lx, baseY + 3.5 + i * 7, lz) * CFrame.Angles(0, 0, math.rad(90)),
-			Material = Enum.Material.SmoothPlastic,
+			Size = Vector3.new(7, 10 - i * 0.7, 10 - i * 0.7),
+			CFrame = CFrame.new(lhPos + Vector3.new(0, 3.5 + i * 7, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+			Material = M.SmoothPlastic,
 			Color = (i % 2 == 0) and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(200, 40, 40),
+			CastShadow = true,
 			Parent = dock,
 		})
 	end
@@ -1201,45 +1543,48 @@ local function buildDock(root)
 		Name = "LighthouseLamp",
 		Shape = Enum.PartType.Ball,
 		Size = Vector3.new(5, 5, 5),
-		CFrame = CFrame.new(lx, baseY + 45, lz),
-		Material = Enum.Material.Neon,
+		CFrame = CFrame.new(lhPos + Vector3.new(0, 52, 0)),
+		Material = M.Neon,
 		Color = Color3.fromRGB(255, 240, 170),
 		Parent = dock,
 	})
-	local bl = Instance.new("PointLight")
-	bl.Range = 50
-	bl.Brightness = 2
-	bl.Color = Color3.fromRGB(255, 235, 170)
-	bl.Parent = beacon
+	light(beacon, 60, 2, Color3.fromRGB(255, 235, 170), false)
+	part({
+		Name = "LighthouseCap",
+		Size = Vector3.new(6, 3, 6),
+		CFrame = CFrame.new(lhPos + Vector3.new(0, 55.5, 0)),
+		Material = M.Metal,
+		Color = Color3.fromRGB(40, 40, 45),
+		Mesh = SPHERE,
+		Parent = dock,
+	})
 
-	-- Buoys marking the dive area
-	for i = 1, 10 do
-		local x = -300 + (i - 1) * 66
+	-- Buoys floating in the Well
+	for i = 1, 8 do
+		local a = i / 8 * TAU
 		local b = deco({
 			Name = "Buoy",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(3, 3, 3),
-			CFrame = CFrame.new(x, S + 0.6, 40 + (i % 2) * 30),
-			Material = Enum.Material.SmoothPlastic,
-			Color = (i % 2 == 0) and Color3.fromRGB(255, 80, 60) or Color3.fromRGB(255, 255, 255),
+			Size = Vector3.new(2.6, 3, 2.6),
+			CFrame = radial(55, a, S + 0.6),
+			Material = M.SmoothPlastic,
+			Color = (i % 2 == 0) and Color3.fromRGB(240, 70, 50) or Color3.fromRGB(245, 245, 245),
+			Mesh = SPHERE,
 			Parent = dock,
 		})
-		local top = deco({
+		deco({
 			Name = "BuoyLight",
-			Size = Vector3.new(0.6, 1.6, 0.6),
-			CFrame = b.CFrame * CFrame.new(0, 2, 0),
-			Material = Enum.Material.Neon,
+			Size = Vector3.new(0.6, 0.8, 0.6),
+			CFrame = b.CFrame * CFrame.new(0, 1.9, 0),
+			Material = M.Neon,
 			Color = Color3.fromRGB(255, 220, 100),
+			Mesh = SPHERE,
 			Parent = dock,
 		})
-		_ = top
 	end
-
-	WorldBuilder.SpawnCFrame = CFrame.new(0, DOCK_TOP + 3, -150)
 end
 
 ------------------------------------------------------------------------
--- Ocean decorations
+-- Inside the Well
 ------------------------------------------------------------------------
 local CORAL_COLORS = {
 	Color3.fromRGB(255, 100, 130),
@@ -1250,337 +1595,444 @@ local CORAL_COLORS = {
 	Color3.fromRGB(255, 80, 80),
 }
 
-local function buildReef(root)
-	local reef = Instance.new("Folder")
-	reef.Name = "Reef"
-	reef.Parent = root
-
-	-- Coral clusters
-	for _ = 1, 150 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(-90, 295)
-		local fy = WorldBuilder.RealFloorY(x, z)
-		local color = CORAL_COLORS[rng:NextInteger(1, #CORAL_COLORS)]
-		local kind = rng:NextInteger(1, 3)
-		if kind == 1 then
-			-- branching coral
-			for b = 1, rng:NextInteger(3, 5) do
-				local h = rng:NextNumber(3, 7)
-				deco({
-					Name = "Coral",
-					Size = Vector3.new(0.8, h, 0.8),
-					CFrame = CFrame.new(x, fy + h / 2 - 0.5, z)
-						* CFrame.Angles(rng:NextNumber(-0.5, 0.5), b * 1.3, rng:NextNumber(-0.5, 0.5)),
-					Material = Enum.Material.SmoothPlastic,
-					Color = color,
-					Parent = reef,
-				})
-			end
-		elseif kind == 2 then
-			-- brain coral
-			local s = rng:NextNumber(3, 6)
+local function coralOnWall(folder, pos, normal)
+	local base = CFrame.lookAt(pos, pos + normal) -- -Z (LookVector) points out of the wall
+	local color = CORAL_COLORS[rng:NextInteger(1, #CORAL_COLORS)]
+	local kind = rng:NextInteger(1, 4)
+	if kind == 1 then
+		-- tube sponges sticking out of the rock
+		for _ = 1, rng:NextInteger(3, 5) do
+			local len = rng:NextNumber(2, 4.5)
+			local off = CFrame.new(rng:NextNumber(-1.5, 1.5), rng:NextNumber(-1.5, 1.5), 0)
 			deco({
-				Name = "BrainCoral",
-				Size = Vector3.new(s, s * 0.65, s * rng:NextNumber(0.8, 1.1)),
-				CFrame = CFrame.new(x, fy + s * 0.15, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
-				Material = Enum.Material.Pebble,
+				Name = "TubeSponge",
+				Size = Vector3.new(0.9, 0.9, len),
+				CFrame = base
+					* off
+					* CFrame.Angles(rng:NextNumber(-0.5, 0.2), rng:NextNumber(-0.4, 0.4), 0)
+					* CFrame.new(0, 0, -len / 2),
+				Material = M.SmoothPlastic,
 				Color = color,
-				Mesh = Enum.MeshType.Sphere,
-				Parent = reef,
-			})
-			-- a sea fan next to it
-			local fh = rng:NextNumber(3, 6)
-			deco({
-				Name = "SeaFan",
-				Size = Vector3.new(0.15, fh, fh * 0.9),
-				CFrame = CFrame.new(x + s * 0.6, fy + fh * 0.45, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
-				Material = Enum.Material.Fabric,
-				Color = CORAL_COLORS[rng:NextInteger(1, #CORAL_COLORS)],
-				Transparency = 0.1,
-				Mesh = Enum.MeshType.Sphere,
-				Sway = fh,
-				Parent = reef,
-			})
-		else
-			-- tube coral (some glow a little)
-			for b = 1, rng:NextInteger(3, 6) do
-				local h = rng:NextNumber(2, 5)
-				deco({
-					Name = "TubeCoral",
-					Shape = Enum.PartType.Cylinder,
-					Size = Vector3.new(h, 1.2, 1.2),
-					CFrame = CFrame.new(x + rng:NextNumber(-2, 2), fy + h / 2 - 0.3, z + rng:NextNumber(-2, 2))
-						* CFrame.Angles(0, 0, math.rad(90)),
-					Material = (b == 1) and Enum.Material.Neon or Enum.Material.SmoothPlastic,
-					Color = color,
-					Parent = reef,
-				})
-			end
-		end
-	end
-
-	-- Kelp forest
-	for _ = 1, 90 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(-60, 280)
-		local fy = WorldBuilder.RealFloorY(x, z)
-		-- each kelp plant is a few long leafy blades that sway in the current
-		for blade = 1, 3 do
-			local h = rng:NextNumber(12, 30)
-			deco({
-				Name = "Kelp",
-				Size = Vector3.new(0.3, h, 1.8),
-				CFrame = CFrame.new(x + rng:NextNumber(-1.2, 1.2), fy + h / 2 - 0.5, z + rng:NextNumber(-1.2, 1.2))
-					* CFrame.Angles(rng:NextNumber(-0.1, 0.1), blade * 1.1, rng:NextNumber(-0.1, 0.1)),
-				Material = Enum.Material.SmoothPlastic,
-				Color = Color3.fromRGB(rng:NextInteger(50, 90), rng:NextInteger(115, 150), 45),
-				Transparency = 0.05,
-				Mesh = Enum.MeshType.Sphere,
-				Sway = h,
-				Parent = reef,
+				Mesh = SPHERE,
+				Parent = folder,
 			})
 		end
-	end
-
-	-- Shipwreck on the reef
-	local wx, wz = -190, 210
-	local wy = WorldBuilder.RealFloorY(wx, wz)
-	local ship = Instance.new("Model")
-	ship.Name = "OldShipwreck"
-	ship.Parent = reef
-	local shipCF = CFrame.new(wx, wy + 4, wz) * CFrame.Angles(0, math.rad(30), math.rad(14))
-	local shipWood = Color3.fromRGB(90, 65, 45)
-	part({
-		Name = "Keel",
-		Size = Vector3.new(10, 3, 46),
-		CFrame = shipCF,
-		Material = Enum.Material.WoodPlanks,
-		Color = shipWood,
-		Parent = ship,
-	})
-	for _, side in ipairs({ -1, 1 }) do
-		part({
-			Name = "Side",
-			Size = Vector3.new(1, 9, 44),
-			CFrame = shipCF * CFrame.new(side * 6, 4, 0) * CFrame.Angles(0, 0, math.rad(side * 12)),
-			Material = Enum.Material.WoodPlanks,
-			Color = shipWood,
-			Parent = ship,
-		})
-	end
-	part({
-		Name = "BrokenMast",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(26, 1.6, 1.6),
-		CFrame = shipCF * CFrame.new(0, 12, -4) * CFrame.Angles(0.3, 0, math.rad(80)),
-		Material = Enum.Material.Wood,
-		Color = shipWood,
-		Parent = ship,
-	})
-	part({
-		Name = "Sail",
-		Size = Vector3.new(0.3, 12, 14),
-		CFrame = shipCF * CFrame.new(3, 14, -4) * CFrame.Angles(0.3, 0, math.rad(-10)),
-		Material = Enum.Material.Fabric,
-		Color = Color3.fromRGB(200, 190, 160),
-		Transparency = 0.2,
-		CanCollide = false,
-		Parent = ship,
-	})
-
-	-- Twilight: glowing crystals (light sources in the dark)
-	local crystalColors = { Color3.fromRGB(80, 240, 255), Color3.fromRGB(170, 100, 255), Color3.fromRGB(80, 255, 160) }
-	for i = 1, 90 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(380, 840)
-		local fy = WorldBuilder.RealFloorY(x, z)
-		local color = crystalColors[rng:NextInteger(1, #crystalColors)]
-		local base
-		for c = 1, rng:NextInteger(2, 4) do
-			local h = rng:NextNumber(2, 6)
-			local p = deco({
-				Name = "Crystal",
-				Size = Vector3.new(0.9, h, 0.9),
-				CFrame = CFrame.new(x + rng:NextNumber(-1.5, 1.5), fy + h / 2 - 0.4, z + rng:NextNumber(-1.5, 1.5))
-					* CFrame.Angles(rng:NextNumber(-0.5, 0.5), c, rng:NextNumber(-0.5, 0.5)),
-				Material = Enum.Material.Neon,
-				Color = color,
-				Transparency = 0.15,
-				Parent = reef,
-			})
-			base = base or p
-		end
-		if i % 3 == 0 and base then
-			local l = Instance.new("PointLight")
-			l.Range = 14
-			l.Brightness = 1.4
-			l.Color = color
-			l.Parent = base
-		end
-	end
-
-	-- Twilight: anemones that glow
-	for _ = 1, 60 do
-		local x = rng:NextNumber(-420, 420)
-		local z = rng:NextNumber(410, 840)
-		local fy = WorldBuilder.RealFloorY(x, z)
+	elseif kind == 2 then
+		-- brain coral dome
+		local s = rng:NextNumber(2.5, 5)
 		deco({
-			Name = "GlowAnemone",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(2.2, 2.2, 2.2),
-			CFrame = CFrame.new(x, fy + 0.6, z),
-			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(255, 90, 200),
-			Transparency = 0.3,
-			Parent = reef,
+			Name = "BrainCoral",
+			Size = Vector3.new(s, s, s * 0.6),
+			CFrame = base * CFrame.new(0, 0, -s * 0.15),
+			Material = M.Pebble,
+			Color = color,
+			Mesh = SPHERE,
+			Parent = folder,
+		})
+	elseif kind == 3 then
+		-- sea fan
+		local h = rng:NextNumber(3, 6)
+		deco({
+			Name = "SeaFan",
+			Size = Vector3.new(h, h * 0.9, 0.15),
+			CFrame = base * CFrame.new(0, 0, -h * 0.4),
+			Material = M.Fabric,
+			Color = color,
+			Transparency = 0.1,
+			Mesh = SPHERE,
+			Sway = h,
+			Parent = folder,
+		})
+	else
+		-- anemone with glowing tips
+		deco({
+			Name = "Anemone",
+			Size = Vector3.new(1.6, 1.6, 1.2),
+			CFrame = base * CFrame.new(0, 0, -0.4),
+			Material = M.SmoothPlastic,
+			Color = Color3.fromRGB(255, 160, 80),
+			Mesh = SPHERE,
+			Parent = folder,
+		})
+		for _ = 1, 6 do
+			deco({
+				Name = "AnemoneTip",
+				Size = Vector3.new(0.25, 0.25, 1.3),
+				CFrame = base
+					* CFrame.new(rng:NextNumber(-0.6, 0.6), rng:NextNumber(-0.6, 0.6), -1.2)
+					* CFrame.Angles(rng:NextNumber(-0.5, 0.5), rng:NextNumber(-0.5, 0.5), 0),
+				Material = M.Neon,
+				Color = Color3.fromRGB(255, 120, 200),
+				Mesh = SPHERE,
+				Parent = folder,
+			})
+		end
+	end
+end
+
+local function kelpOnLedge(folder, pos)
+	for blade = 1, rng:NextInteger(2, 4) do
+		local h = rng:NextNumber(8, 20)
+		deco({
+			Name = "Kelp",
+			Size = Vector3.new(0.3, h, 1.6),
+			CFrame = CFrame.new(pos + Vector3.new(rng:NextNumber(-1.2, 1.2), h / 2 - 0.5, rng:NextNumber(-1.2, 1.2)))
+				* CFrame.Angles(rng:NextNumber(-0.1, 0.1), blade * 1.1, rng:NextNumber(-0.1, 0.1)),
+			Material = M.SmoothPlastic,
+			Color = Color3.fromRGB(rng:NextInteger(55, 95), rng:NextInteger(120, 155), 45),
+			Mesh = SPHERE,
+			Sway = h,
+			Parent = folder,
 		})
 	end
+end
 
-	-- Twilight: giant whale skeleton
-	local sx, sz = 170, 560
-	local sy = WorldBuilder.RealFloorY(sx, sz) + 3
+local CRYSTAL_COLORS = { Color3.fromRGB(80, 240, 255), Color3.fromRGB(170, 100, 255), Color3.fromRGB(80, 255, 160) }
+
+local function crystalCluster(folder, pos, normal, withLight)
+	local base = CFrame.lookAt(pos, pos + normal)
+	local color = CRYSTAL_COLORS[rng:NextInteger(1, #CRYSTAL_COLORS)]
+	local first
+	for _ = 1, rng:NextInteger(3, 5) do
+		local len = rng:NextNumber(2, 6)
+		local p = deco({
+			Name = "Crystal",
+			Size = Vector3.new(0.9, 0.9, len),
+			CFrame = base
+				* CFrame.new(rng:NextNumber(-1, 1), rng:NextNumber(-1, 1), 0)
+				* CFrame.Angles(rng:NextNumber(-0.6, 0.6), rng:NextNumber(-0.6, 0.6), 0)
+				* CFrame.new(0, 0, -len / 2),
+			Material = M.Neon,
+			Color = color,
+			Transparency = 0.15,
+			Parent = folder,
+		})
+		first = first or p
+	end
+	if withLight and first then
+		light(first, 16, 1.5, color, false)
+	end
+end
+
+local function buildWell(root)
+	local well = Instance.new("Folder")
+	well.Name = "Reef" -- (clients look for swaying plants in here)
+	well.Parent = root
+
+	-- Sun rays shining down from the surface
+	for i = 1, 8 do
+		local a = rng:NextNumber(0, TAU)
+		local r = rng:NextNumber(0, 70)
+		local len = rng:NextNumber(110, 190)
+		local w = rng:NextNumber(6, 14)
+		deco({
+			Name = "LightRay",
+			Size = Vector3.new(w, len, w * 0.6),
+			CFrame = CFrame.new(math.cos(a) * r, S - len / 2 - 2, math.sin(a) * r)
+				* CFrame.Angles(math.rad(rng:NextNumber(-6, 6)), a, math.rad(rng:NextNumber(-6, 6))),
+			Material = M.Neon,
+			Color = Color3.fromRGB(190, 235, 255),
+			Transparency = 0.94,
+			Parent = well,
+		})
+		_ = i
+	end
+
+	-- Depth marker lights every 50 m
+	for depth = 50, 550, 50 do
+		for k = 0, 3 do
+			local a = k / 4 * TAU + depth / 70
+			local pos, normal = wallHit(a, depth)
+			if pos then
+				local cf = CFrame.lookAt(pos, pos + normal)
+				local plate = deco({
+					Name = "DepthMarker",
+					Size = Vector3.new(5, 2.4, 0.4),
+					CFrame = cf * CFrame.new(0, 0, -0.3),
+					Material = M.Metal,
+					Color = Color3.fromRGB(40, 44, 52),
+					Parent = well,
+				})
+				surfaceText(plate, Enum.NormalId.Front, depth .. " m", Color3.fromRGB(255, 200, 90), 30)
+				local lamp = deco({
+					Name = "MarkerLamp",
+					Size = Vector3.new(0.8, 0.8, 0.8),
+					CFrame = cf * CFrame.new(0, 1.8, -0.5),
+					Material = M.Neon,
+					Color = depth < 200 and Color3.fromRGB(255, 210, 120) or Color3.fromRGB(255, 80, 60),
+					Mesh = SPHERE,
+					Parent = well,
+				})
+				light(lamp, 26, 1.6, lamp.Color, false)
+			end
+		end
+		task.wait()
+	end
+
+	-- Sunlit Reef: coral and sponges on the walls, kelp on the ledges
+	for i = 1, 230 do
+		local a = rng:NextNumber(0, TAU)
+		local depth = rng:NextNumber(4, 198)
+		local pos, normal = wallHit(a, depth)
+		if pos then
+			coralOnWall(well, pos, normal)
+		end
+		if i % 3 == 0 then
+			local r = WorldBuilder.ShaftRadius(depth) - rng:NextNumber(4, 12)
+			local ground = groundBelow(Vector3.new(math.cos(a) * r, S - depth, math.sin(a) * r), 40)
+			if ground and S - ground.Y < 205 then
+				kelpOnLedge(well, ground)
+			end
+		end
+		if i % 40 == 0 then
+			task.wait()
+		end
+	end
+
+	-- Twilight Drop: glowing crystals on the walls and in the caves
+	for i = 1, 140 do
+		local a = rng:NextNumber(0, TAU)
+		local depth = rng:NextNumber(215, 600)
+		local pos, normal = wallHit(a, depth)
+		if pos then
+			crystalCluster(well, pos, normal, i % 4 == 0)
+		end
+		if i % 40 == 0 then
+			task.wait()
+		end
+	end
+	for _, cave in ipairs(CAVES) do
+		for k = 1, 6 do
+			local a = cave.Angle + rng:NextNumber(-0.2, 0.2)
+			local pos, normal = wallHit(a, cave.Depth + rng:NextNumber(-8, 8))
+			if pos then
+				crystalCluster(well, pos, normal, k == 1)
+			end
+		end
+	end
+
+	-- The Lip at 200 m: wreck of the research sub "Meridian"
+	do
+		local a = 1.1
+		local r = 92
+		local ground = groundBelow(Vector3.new(math.cos(a) * r, S - 195, math.sin(a) * r), 40)
+		local base = ground or Vector3.new(math.cos(a) * r, S - 214, math.sin(a) * r)
+		local wreck = Instance.new("Model")
+		wreck.Name = "MeridianWreck"
+		wreck.Parent = well
+		local cf = CFrame.new(base + Vector3.new(0, 3, 0)) * CFrame.Angles(0, a + 1.4, math.rad(20))
+		local rust = Color3.fromRGB(130, 80, 55)
+		part({
+			Name = "Hull",
+			Size = Vector3.new(7, 6.5, 22),
+			CFrame = cf,
+			Material = M.CorrodedMetal,
+			Color = rust,
+			Mesh = SPHERE,
+			Parent = wreck,
+		})
+		part({
+			Name = "Tower",
+			Size = Vector3.new(2.5, 4, 6),
+			CFrame = cf * CFrame.new(0, 3.6, 1),
+			Material = M.CorrodedMetal,
+			Color = rust,
+			Mesh = SPHERE,
+			Parent = wreck,
+		})
+		deco({
+			Name = "BrokenGlass",
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(5, 5, 5),
+			CFrame = cf * CFrame.new(0, 0.4, -10),
+			Material = M.Glass,
+			Color = Color3.fromRGB(120, 160, 170),
+			Transparency = 0.6,
+			Parent = wreck,
+		})
+		local nameplate = deco({
+			Name = "Nameplate",
+			Size = Vector3.new(0.2, 1.4, 5),
+			CFrame = cf * CFrame.new(3.4, 0.5, 2),
+			Material = M.Metal,
+			Color = Color3.fromRGB(90, 80, 60),
+			Parent = wreck,
+		})
+		surfaceText(nameplate, Enum.NormalId.Right, "MERIDIAN", Color3.fromRGB(220, 200, 150), 30)
+		local blink = deco({
+			Name = "DeadBeacon",
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(0.6, 0.6, 0.6),
+			CFrame = cf * CFrame.new(0, 6, 1),
+			Material = M.Neon,
+			Color = Color3.fromRGB(255, 60, 40),
+			Parent = wreck,
+		})
+		light(blink, 14, 1, Color3.fromRGB(255, 60, 40), false)
+	end
+
+	-- The bottom: whale skeleton, vents, the sealed door
 	local bone = Color3.fromRGB(225, 220, 200)
 	local skeleton = Instance.new("Model")
 	skeleton.Name = "WhaleSkeleton"
-	skeleton.Parent = reef
+	skeleton.Parent = well
+	local sx, sz = -25, 20
+	local sy = WorldBuilder.RealFloorY(sx, sz) + 2
 	for i = 0, 13 do
-		local z = sz - 35 + i * 5
-		part({
+		local z = sz - 30 + i * 4.5
+		local s = 2.8 - i * 0.12
+		deco({
 			Name = "Spine",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(3.2 - i * 0.12, 3.2 - i * 0.12, 3.2 - i * 0.12),
-			CFrame = CFrame.new(sx, sy + 8 - math.abs(i - 5) * 0.4, z),
-			Material = Enum.Material.Limestone,
+			Size = Vector3.new(s, s, s * 1.3),
+			CFrame = CFrame.new(sx, sy + 6 - math.abs(i - 5) * 0.35, z),
+			Material = M.Limestone,
 			Color = bone,
-			CanCollide = false,
+			Mesh = SPHERE,
 			Parent = skeleton,
 		})
 		if i > 1 and i < 10 then
 			for _, side in ipairs({ -1, 1 }) do
-				part({
+				deco({
 					Name = "Rib",
-					Size = Vector3.new(0.9, 13 - math.abs(i - 5), 0.9),
-					CFrame = CFrame.new(sx + side * 4, sy + 3, z) * CFrame.Angles(0, 0, math.rad(side * 28)),
-					Material = Enum.Material.Limestone,
+					Size = Vector3.new(0.8, 11 - math.abs(i - 5), 0.8),
+					CFrame = CFrame.new(sx + side * 3.5, sy + 2.2, z) * CFrame.Angles(0, 0, math.rad(side * 30)),
+					Material = M.Limestone,
 					Color = bone,
-					CanCollide = false,
+					Mesh = SPHERE,
 					Parent = skeleton,
 				})
 			end
 		end
 	end
-	part({
+	deco({
 		Name = "Skull",
-		Size = Vector3.new(9, 5, 12),
-		CFrame = CFrame.new(sx, sy + 5, sz - 44) * CFrame.Angles(0.2, 0, 0),
-		Material = Enum.Material.Limestone,
+		Size = Vector3.new(8, 4.5, 11),
+		CFrame = CFrame.new(sx, sy + 3.5, sz - 37) * CFrame.Angles(0.2, 0, 0),
+		Material = M.Limestone,
 		Color = bone,
+		Mesh = SPHERE,
 		Parent = skeleton,
 	})
 
-	-- The sealed door at the bottom of the trench (future update teaser)
-	local dx, dz = 0, 770
-	local dy = WorldBuilder.RealFloorY(dx, dz)
-	local door = Instance.new("Model")
-	door.Name = "SealedDoor"
-	door.Parent = reef
-	local stone = Color3.fromRGB(70, 75, 90)
-	part({
-		Name = "FrameTop",
-		Size = Vector3.new(46, 8, 8),
-		CFrame = CFrame.new(dx, dy + 44, dz),
-		Material = Enum.Material.Slate,
-		Color = stone,
-		Parent = door,
-	})
-	for _, side in ipairs({ -1, 1 }) do
+	for i = 1, 5 do
+		local a = i / 5 * TAU + 0.4
+		local r = rng:NextNumber(30, 60)
+		local x, z = math.cos(a) * r, math.sin(a) * r
+		local y = WorldBuilder.RealFloorY(x, z)
+		local vent = deco({
+			Name = "Vent",
+			Size = Vector3.new(4, 3, 4),
+			CFrame = CFrame.new(x, y + 0.8, z),
+			Material = M.Basalt,
+			Color = Color3.fromRGB(40, 35, 35),
+			Mesh = SPHERE,
+			Parent = well,
+		})
+		local glow = deco({
+			Name = "VentGlow",
+			Size = Vector3.new(1.6, 0.6, 1.6),
+			CFrame = CFrame.new(x, y + 2.2, z),
+			Material = M.Neon,
+			Color = Color3.fromRGB(255, 120, 40),
+			Mesh = SPHERE,
+			Parent = well,
+		})
+		light(glow, 18, 1.6, Color3.fromRGB(255, 120, 50), false)
+		local att = Instance.new("Attachment")
+		att.Position = Vector3.new(0, 1.5, 0)
+		att.Parent = vent
+		local bubbles = Instance.new("ParticleEmitter")
+		bubbles.Texture = "rbxasset://textures/particles/smoke_main.dds"
+		bubbles.Color = ColorSequence.new(Color3.fromRGB(220, 240, 255))
+		bubbles.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1.4) })
+		bubbles.Transparency =
+			NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 1) })
+		bubbles.Speed = NumberRange.new(6, 10)
+		bubbles.Lifetime = NumberRange.new(4, 6)
+		bubbles.SpreadAngle = Vector2.new(8, 8)
+		bubbles.Rate = 14
+		bubbles.EmissionDirection = Enum.NormalId.Top
+		bubbles.Parent = att
+	end
+
+	-- Sealed door set into the wall at the bottom
+	local doorA = 4.7
+	local doorPos, doorNormal = wallHit(doorA, FLOOR_DEPTH - 14)
+	if doorPos then
+		local cf = CFrame.lookAt(doorPos, doorPos + doorNormal) -- -Z faces into the Well
+		local door = Instance.new("Model")
+		door.Name = "SealedDoor"
+		door.Parent = well
+		local stone = Color3.fromRGB(70, 75, 90)
 		part({
-			Name = "Pillar",
-			Size = Vector3.new(8, 48, 8),
-			CFrame = CFrame.new(dx + side * 19, dy + 20, dz),
-			Material = Enum.Material.Slate,
+			Name = "Frame",
+			Size = Vector3.new(36, 34, 6),
+			CFrame = cf * CFrame.new(0, 2, 1),
+			Material = M.Slate,
 			Color = stone,
 			Parent = door,
 		})
-	end
-	local slab = part({
-		Name = "Door",
-		Size = Vector3.new(30, 40, 3),
-		CFrame = CFrame.new(dx, dy + 20, dz),
-		Material = Enum.Material.CorrodedMetal,
-		Color = Color3.fromRGB(60, 80, 90),
-		Parent = door,
-	})
-	for i = 1, 3 do
-		deco({
-			Name = "Rune",
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.4, 6 + i * 6, 6 + i * 6),
-			CFrame = CFrame.new(dx, dy + 22, dz - 1.6) * CFrame.Angles(0, math.rad(90), 0),
-			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(60, 150, 255),
-			Transparency = 0.55 + i * 0.1,
+		local slab = part({
+			Name = "Door",
+			Size = Vector3.new(26, 26, 2),
+			CFrame = cf * CFrame.new(0, 1, -2.2),
+			Material = M.CorrodedMetal,
+			Color = Color3.fromRGB(55, 75, 85),
 			Parent = door,
 		})
+		for i = 1, 3 do
+			deco({
+				Name = "Rune",
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(0.4, 5 + i * 6, 5 + i * 6),
+				CFrame = cf * CFrame.new(0, 1, -3.3) * CFrame.Angles(0, math.rad(90), 0),
+				Material = M.Neon,
+				Color = Color3.fromRGB(60, 150, 255),
+				Transparency = 0.5 + i * 0.12,
+				Parent = door,
+			})
+		end
+		light(slab, 45, 2, Color3.fromRGB(70, 140, 255), false)
+		surfaceText(
+			slab,
+			Enum.NormalId.Front,
+			"SEALED\nThe Midnight Trench lies beyond...\n(coming in a future update)",
+			Color3.fromRGB(150, 210, 255),
+			20
+		)
 	end
-	local glow = Instance.new("PointLight")
-	glow.Range = 45
-	glow.Brightness = 2
-	glow.Color = Color3.fromRGB(70, 140, 255)
-	glow.Parent = slab
-	surfaceText(
-		slab,
-		Enum.NormalId.Front,
-		"SEALED\nThe Midnight Trench lies beyond...\n(coming in a future update)",
-		Color3.fromRGB(150, 210, 255),
-		nil,
-		20
-	)
 end
 
 ------------------------------------------------------------------------
--- Water + lighting
+-- Lighting
 ------------------------------------------------------------------------
-local function buildWater(root)
-	-- (the water itself is real Terrain water, made in buildTerrain)
-
-	-- Invisible safety walls around the ocean (terrain walls are the real ones)
-	local walls = {
-		{ Vector3.new(20, 900, 1300), Vector3.new(-505, S - 400, 340) },
-		{ Vector3.new(20, 900, 1300), Vector3.new(505, S - 400, 340) },
-		{ Vector3.new(1050, 900, 20), Vector3.new(0, S - 400, 920) },
-	}
-	for _, w in ipairs(walls) do
-		part({
-			Name = "OceanWall",
-			Size = w[1],
-			CFrame = CFrame.new(w[2]),
-			Transparency = 1,
-			CanQuery = false,
-			CastShadow = false,
-			Parent = root,
-		})
-	end
-
-	-- Lighting defaults (the client darkens this as you dive)
+local function setupLighting(root)
 	for _, child in ipairs(Lighting:GetChildren()) do
-		if child:IsA("Atmosphere") then
-			child:Destroy() -- Atmosphere overrides fog, which we use for the deep
+		if child:IsA("Atmosphere") or child:IsA("Sky") then
+			child:Destroy() -- the client makes its own atmosphere that changes with depth
 		end
 	end
-	Lighting.ClockTime = 14.5
-	Lighting.Brightness = 2
+	local sky = Instance.new("Sky")
+	sky.SunAngularSize = 14
+	sky.MoonAngularSize = 8
+	sky.Parent = Lighting
+	Lighting.ClockTime = 15.2
+	Lighting.GeographicLatitude = 30
+	Lighting.Brightness = 2.6
 	Lighting.GlobalShadows = true
 	Lighting.Ambient = Color3.fromRGB(70, 80, 95)
-	Lighting.OutdoorAmbient = Color3.fromRGB(130, 140, 150)
+	Lighting.OutdoorAmbient = Color3.fromRGB(130, 140, 155)
+	Lighting.EnvironmentDiffuseScale = 1
+	Lighting.EnvironmentSpecularScale = 1
 	Lighting.FogEnd = 100000
+
+	_ = root
 end
 
 ------------------------------------------------------------------------
 -- Build everything
 ------------------------------------------------------------------------
 function WorldBuilder.Build()
-	-- Remove the default baseplate / spawn from the template place
 	for _, name in ipairs({ "Baseplate", "SpawnLocation" }) do
 		local obj = workspace:FindFirstChild(name)
 		if obj then
@@ -1592,10 +2044,10 @@ function WorldBuilder.Build()
 	root.Name = "DeepDiveWorld"
 	root.Parent = workspace
 
-	buildWater(root)
-	buildDock(root)
+	setupLighting(root)
 	buildTerrain()
-	buildReef(root)
+	buildHarbor(root)
+	buildWell(root)
 
 	return WorldBuilder
 end
@@ -2796,12 +3248,7 @@ end
 Monsters.ClosestOnSub = closestOnSub
 
 local function clampToWater(pos)
-	local o = Config.Ocean
-	local x = math.clamp(pos.X, o.MinX, o.MaxX)
-	local z = math.clamp(pos.Z, o.MinZ, o.MaxZ)
-	local floorY = ctx.FloorY(x, z) + 4
-	local y = math.clamp(pos.Y, floorY, S - 8)
-	return Vector3.new(x, y, z)
+	return ctx.ClampToWater(pos)
 end
 
 local function safeUnit(v)
@@ -2929,10 +3376,15 @@ local function trySpawnNear(sub)
 	local def = Config.Monsters[kind]
 	local count = rng:NextInteger(def.Group[1], def.Group[2])
 	count = math.min(count, maxHere - nearby)
+	-- monsters come out of the dark above or below you, somewhere in the Well
 	local angle = rng:NextNumber(0, math.pi * 2)
 	local dist = rng:NextNumber(Config.Spawning.SpawnDistance[1], Config.Spawning.SpawnDistance[2])
-	local center =
-		clampToWater(subPos + Vector3.new(math.cos(angle) * dist, rng:NextNumber(-25, 25), math.sin(angle) * dist))
+	local vertical = (rng:NextNumber() < 0.6 and 1 or -1) * dist
+	local flat = Vector3.new(math.cos(angle), 0, math.sin(angle)) * rng:NextNumber(10, 60)
+	local center = clampToWater(Vector3.new(flat.X, subPos.Y + vertical, flat.Z))
+	if (center - subPos).Magnitude < 35 then
+		return -- too close to pop in without being seen
+	end
 	-- don't spawn shallow monsters right under the dock
 	if S - center.Y < Config.Spawning.MinDepth - 8 then
 		return
@@ -3809,7 +4261,7 @@ local function updateBerthSign(berth)
 		label.Text = text
 		label.TextColor3 = berth.Owner and Color3.fromRGB(255, 220, 120) or Color3.new(1, 1, 1)
 	end
-	berth.Marker.Transparency = berth.Owner and 0.7 or 0.92
+	berth.Marker.Color = berth.Owner and Color3.fromRGB(255, 200, 80) or Color3.fromRGB(140, 200, 255)
 end
 
 local function spawnSub(owner)
@@ -4403,23 +4855,10 @@ local function createLoot(def, pos, value, zoneName, signal)
 end
 
 local function randomFloorPoint(zoneName)
-	local o = Config.Ocean
-	for _ = 1, 30 do
-		local x = rng:NextNumber(o.MinX + 10, o.MaxX - 10)
-		local z
-		if zoneName == "Sunlit Reef" then
-			z = rng:NextNumber(-80, 290)
-		else
-			z = rng:NextNumber(420, 830)
-		end
-		local d = WorldBuilder.FloorDepth(x, z)
-		local valid = (zoneName == "Sunlit Reef" and d > 18 and d < 200)
-			or (zoneName == "Twilight Drop" and d >= 300 and d < 650)
-		if valid then
-			return Vector3.new(x, WorldBuilder.RealFloorY(x, z) + 1.6, z)
-		end
+	if zoneName == "Sunlit Reef" then
+		return WorldBuilder.LootSpot(25, 198)
 	end
-	return nil
+	return WorldBuilder.LootSpot(215, 620)
 end
 
 local function pickLootType(zoneName)
@@ -4625,7 +5064,7 @@ end
 ------------------------------------------------------------------------
 Monsters.Init({
 	RootFolder = rootFolder,
-	FloorY = WorldBuilder.FloorY,
+	ClampToWater = WorldBuilder.ClampToWater,
 	GetDivingSubs = function()
 		local list = {}
 		for _, sub in pairs(subs) do
@@ -4686,7 +5125,7 @@ local function stepSub(sub, dt)
 	sub.LastPos = pos
 
 	-- Way out of bounds? Send it home.
-	if pos.Y > S + 15 or depth > 1200 or math.abs(pos.X) > 520 or pos.Z > 950 or pos.Z < -260 then
+	if pos.Y > S + 15 or depth > 700 or Vector3.new(pos.X, 0, pos.Z).Magnitude > 200 then
 		resetToBerth(sub)
 		return
 	end
