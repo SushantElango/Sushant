@@ -29,8 +29,12 @@ local nextId = 0
 ------------------------------------------------------------------------
 -- Models
 ------------------------------------------------------------------------
-local function weldPart(model, root, props)
-	local p = Instance.new("Part")
+local SPHERE = Enum.MeshType.Sphere
+
+-- Makes one body part. Mesh = Sphere turns a box into a smooth ellipsoid.
+local function mk(model, props)
+	local p = Instance.new(props.Class or "Part")
+	props.Class = nil
 	p.Anchored = false
 	p.Massless = true
 	p.CanCollide = false
@@ -39,15 +43,49 @@ local function weldPart(model, root, props)
 	p.CastShadow = false
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	local mesh = props.Mesh
+	local pulse = props.Pulse
+	props.Mesh = nil
+	props.Pulse = nil
 	for k, v in pairs(props) do
 		p[k] = v
 	end
+	if mesh then
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = mesh
+		if pulse then
+			m:SetAttribute("Pulse", true)
+		end
+		m.Parent = p
+	end
 	p.Parent = model
-	local w = Instance.new("WeldConstraint")
-	w.Part0 = root
-	w.Part1 = p
-	w.Parent = p
 	return p
+end
+
+local function weld(a, b)
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = a
+	w.Part1 = b
+	w.Parent = b
+end
+
+-- A moving joint. Clients read Amp/Freq/Phase/Axis and animate it
+-- (tails swish, tentacles sway, eels slither).
+local function joint(part0, part1, c0, c1, wave)
+	local j = Instance.new("Motor6D")
+	j.Part0 = part0
+	j.Part1 = part1
+	j.C0 = c0
+	j.C1 = c1 or CFrame.new()
+	if wave then
+		j:SetAttribute("Amp", wave[1])
+		j:SetAttribute("Freq", wave[2])
+		j:SetAttribute("Phase", wave[3] or 0)
+		j:SetAttribute("Axis", wave[4] or "Y")
+	end
+	part1.CFrame = part0.CFrame * j.C0 * j.C1:Inverse()
+	j.Parent = part0
+	return j
 end
 
 local function makeRoot(model, size)
@@ -65,125 +103,329 @@ local function makeRoot(model, size)
 	return root
 end
 
-local function eye(model, root, pos, color, size)
-	weldPart(model, root, {
-		Name = "Eye",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(size, size, size),
-		CFrame = CFrame.new(pos),
-		Material = Enum.Material.Neon,
-		Color = color,
-	})
+local function eyePair(model, body, x, y, z, size, irisColor, glow)
+	for _, side in ipairs({ -1, 1 }) do
+		local white = mk(model, {
+			Name = "Eye",
+			Size = Vector3.new(size * 0.7, size, size),
+			CFrame = body.CFrame * CFrame.new(side * x, y, z),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(240, 235, 220),
+			Mesh = SPHERE,
+		})
+		weld(body, white)
+		local iris = mk(model, {
+			Name = "Iris",
+			Size = Vector3.new(size * 0.4, size * 0.62, size * 0.62),
+			CFrame = body.CFrame * CFrame.new(side * (x + size * 0.2), y, z - size * 0.05),
+			Material = glow and Enum.Material.Neon or Enum.Material.SmoothPlastic,
+			Color = irisColor,
+			Mesh = SPHERE,
+		})
+		weld(body, iris)
+		local pupil = mk(model, {
+			Name = "Pupil",
+			Size = Vector3.new(size * 0.25, size * 0.45, size * 0.18),
+			CFrame = body.CFrame * CFrame.new(side * (x + size * 0.32), y, z - size * 0.05),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(10, 10, 12),
+			Mesh = SPHERE,
+		})
+		weld(body, pupil)
+	end
 end
 
 local Builders = {}
 
+-- Piranha-like biter: chunky body, big underbite full of teeth, swishing tail
 function Builders.BiterFish()
 	local model = Instance.new("Model")
 	model.Name = "BiterFish"
 	local root = makeRoot(model, Vector3.new(3, 3, 4))
-	local skin = Color3.fromRGB(220, 110, 50)
-	weldPart(model, root, {
+	local body = mk(model, {
 		Name = "Body",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(3, 3, 3),
-		CFrame = CFrame.new(0, 0, 0),
+		Size = Vector3.new(2.2, 2.9, 4),
+		CFrame = CFrame.new(),
 		Material = Enum.Material.SmoothPlastic,
-		Color = skin,
+		Color = Color3.fromRGB(200, 85, 45),
+		Mesh = SPHERE,
 	})
-	weldPart(model, root, {
+	weld(root, body)
+	local back = mk(model, {
+		Name = "Back",
+		Size = Vector3.new(1.8, 1.6, 3.6),
+		CFrame = CFrame.new(0, 0.72, 0.1),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(95, 60, 55),
+		Mesh = SPHERE,
+	})
+	weld(body, back)
+	local belly = mk(model, {
+		Name = "Belly",
+		Size = Vector3.new(1.9, 1.5, 3.2),
+		CFrame = CFrame.new(0, -0.7, -0.15),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(255, 170, 110),
+		Mesh = SPHERE,
+	})
+	weld(body, belly)
+	-- jaw (underbite) + dark mouth
+	local jaw = mk(model, {
 		Name = "Jaw",
-		Size = Vector3.new(2.2, 0.8, 1.6),
-		CFrame = CFrame.new(0, -0.8, -1.2),
+		Size = Vector3.new(1.7, 0.75, 1.6),
+		CFrame = CFrame.new(0, -0.95, -1.45) * CFrame.Angles(0.3, 0, 0),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(180, 80, 40),
+		Color = Color3.fromRGB(230, 120, 70),
+		Mesh = SPHERE,
 	})
-	for i = -1, 1 do
-		weldPart(model, root, {
+	weld(body, jaw)
+	local mouth = mk(model, {
+		Name = "Mouth",
+		Size = Vector3.new(1.2, 0.5, 0.5),
+		CFrame = CFrame.new(0, -0.6, -1.85),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(60, 10, 15),
+		Mesh = SPHERE,
+	})
+	weld(body, mouth)
+	for i = -2, 2 do
+		local up = mk(model, {
 			Name = "Tooth",
-			Size = Vector3.new(0.25, 0.5, 0.25),
-			CFrame = CFrame.new(i * 0.6, -0.3, -1.85),
+			Size = Vector3.new(0.14, 0.38, 0.14),
+			CFrame = CFrame.new(i * 0.22, -0.48, -1.98 + math.abs(i) * 0.08),
 			Material = Enum.Material.SmoothPlastic,
-			Color = Color3.new(1, 1, 1),
+			Color = Color3.fromRGB(250, 250, 240),
+			Mesh = SPHERE,
 		})
+		weld(body, up)
+		if i ~= 0 then
+			local down = mk(model, {
+				Name = "Tooth",
+				Size = Vector3.new(0.14, 0.34, 0.14),
+				CFrame = CFrame.new(i * 0.25, -0.82, -2.02 + math.abs(i) * 0.08),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(250, 250, 240),
+				Mesh = SPHERE,
+			})
+			weld(body, down)
+		end
 	end
-	weldPart(model, root, {
-		Name = "TailFin",
-		Size = Vector3.new(0.3, 2.2, 1.6),
-		CFrame = CFrame.new(0, 0, 2),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(255, 160, 60),
-	})
-	weldPart(model, root, {
+	eyePair(model, body, 0.9, 0.45, -1.1, 0.7, Color3.fromRGB(255, 40, 30), true)
+	-- fins
+	for _, side in ipairs({ -1, 1 }) do
+		local pec = mk(model, {
+			Name = "PectoralFin",
+			Size = Vector3.new(0.1, 0.8, 1.3),
+			CFrame = CFrame.new(side * 1.15, -0.45, -0.1) * CFrame.Angles(0, side * 0.5, side * 0.7),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(255, 140, 70),
+			Transparency = 0.25,
+			Mesh = SPHERE,
+		})
+		weld(body, pec)
+	end
+	local dorsal = mk(model, {
 		Name = "DorsalFin",
-		Size = Vector3.new(0.25, 1.2, 1.4),
-		CFrame = CFrame.new(0, 1.6, 0.2),
+		Size = Vector3.new(0.12, 1.3, 2),
+		CFrame = CFrame.new(0, 1.55, 0.5) * CFrame.Angles(-0.35, 0, 0),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(255, 160, 60),
+		Color = Color3.fromRGB(150, 70, 50),
+		Transparency = 0.15,
+		Mesh = SPHERE,
 	})
-	eye(model, root, Vector3.new(-0.9, 0.5, -1.0), Color3.fromRGB(255, 40, 40), 0.55)
-	eye(model, root, Vector3.new(0.9, 0.5, -1.0), Color3.fromRGB(255, 40, 40), 0.55)
+	weld(body, dorsal)
+	-- tail on a joint so it swishes
+	local stem = mk(model, {
+		Name = "TailStem",
+		Size = Vector3.new(0.8, 1.1, 1.3),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(190, 80, 45),
+		Mesh = SPHERE,
+	})
+	joint(body, stem, CFrame.new(0, 0, 1.75), CFrame.new(0, 0, -0.4), { 0.45, 12, 0, "Y" })
+	for _, side in ipairs({ -1, 1 }) do
+		local lobe = mk(model, {
+			Name = "TailFin",
+			Size = Vector3.new(0.12, 1.6, 1.3),
+			CFrame = stem.CFrame * CFrame.new(0, side * 0.55, 0.9) * CFrame.Angles(side * 0.6, 0, 0),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(255, 130, 60),
+			Transparency = 0.15,
+			Mesh = SPHERE,
+		})
+		weld(stem, lobe)
+	end
 	return model, root
 end
 
+-- Jellyfish: see-through pulsing bell, glowing core, swaying tentacles
 function Builders.Jellyfish()
 	local model = Instance.new("Model")
 	model.Name = "Jellyfish"
-	local root = makeRoot(model, Vector3.new(3.2, 4, 3.2))
-	local color = Color3.fromRGB(200, 120, 255)
-	local bell = weldPart(model, root, {
+	local root = makeRoot(model, Vector3.new(3.6, 5, 3.6))
+	local bell = mk(model, {
 		Name = "Bell",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(3.2, 3.2, 3.2),
-		CFrame = CFrame.new(0, 0.6, 0),
-		Material = Enum.Material.Neon,
-		Color = color,
+		Size = Vector3.new(3.6, 2.4, 3.6),
+		CFrame = CFrame.new(0, 0.8, 0),
+		Material = Enum.Material.Glass,
+		Color = Color3.fromRGB(215, 140, 255),
 		Transparency = 0.45,
+		Mesh = SPHERE,
+		Pulse = true,
 	})
-	for i = 0, 4 do
-		local a = i / 5 * math.pi * 2
-		weldPart(model, root, {
-			Name = "Tentacle",
-			Size = Vector3.new(0.2, 3.5, 0.2),
-			CFrame = CFrame.new(math.cos(a) * 0.9, -1.8, math.sin(a) * 0.9),
+	weld(root, bell)
+	local core = mk(model, {
+		Name = "Core",
+		Size = Vector3.new(1.6, 1, 1.6),
+		CFrame = CFrame.new(0, 0.7, 0),
+		Material = Enum.Material.Neon,
+		Color = Color3.fromRGB(255, 150, 230),
+		Transparency = 0.25,
+		Mesh = SPHERE,
+		Pulse = true,
+	})
+	weld(bell, core)
+	for i = 0, 9 do
+		local a = i / 10 * math.pi * 2
+		local frill = mk(model, {
+			Name = "Frill",
+			Size = Vector3.new(0.6, 0.35, 0.6),
+			CFrame = CFrame.new(math.cos(a) * 1.65, -0.25, math.sin(a) * 1.65),
 			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(255, 160, 240),
-			Transparency = 0.3,
+			Color = Color3.fromRGB(255, 120, 210),
+			Transparency = 0.35,
+			Mesh = SPHERE,
 		})
+		weld(bell, frill)
 	end
 	local light = Instance.new("PointLight")
-	light.Range = 10
-	light.Brightness = 1.2
-	light.Color = color
-	light.Parent = bell
+	light.Range = 11
+	light.Brightness = 1.3
+	light.Color = Color3.fromRGB(230, 140, 255)
+	light.Parent = core
+	-- tentacles: chains of 3 segments each
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2 + 0.3
+		local prev = bell
+		local c0 = CFrame.new(math.cos(a) * 1.2, -1.2, math.sin(a) * 1.2) * CFrame.new(0, 0, 0)
+		for s = 1, 3 do
+			local seg = mk(model, {
+				Name = "Tentacle",
+				Size = Vector3.new(0.16, 1.3, 0.16),
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(255, 170, 235),
+				Transparency = 0.3 + s * 0.12,
+				Mesh = SPHERE,
+			})
+			joint(prev, seg, c0, CFrame.new(0, 0.6, 0), { 0.28, 2.2, i * 1.1 + s * 0.7, (i % 2 == 0) and "X" or "Z" })
+			prev = seg
+			c0 = CFrame.new(0, -0.6, 0)
+		end
+	end
+	-- two frilly oral arms in the middle
+	for i = 0, 1 do
+		local arm = mk(model, {
+			Name = "OralArm",
+			Size = Vector3.new(0.5, 2.6, 0.3),
+			Material = Enum.Material.Glass,
+			Color = Color3.fromRGB(255, 190, 240),
+			Transparency = 0.3,
+			Mesh = SPHERE,
+		})
+		joint(bell, arm, CFrame.new(i * 0.4 - 0.2, -1, 0), CFrame.new(0, 1.2, 0), { 0.18, 1.5, i * 2, "Z" })
+	end
 	return model, root
 end
 
+-- Moray eel: long slithering body made of jointed segments, open jaws
 function Builders.Eel()
 	local model = Instance.new("Model")
 	model.Name = "Eel"
-	local root = makeRoot(model, Vector3.new(2.4, 2.4, 8))
-	local skin = Color3.fromRGB(60, 90, 70)
-	for i = 0, 5 do
-		local s = 2.2 - i * 0.28
-		weldPart(model, root, {
-			Name = "Segment",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(s, s, s),
-			CFrame = CFrame.new(math.sin(i * 0.9) * 0.4, 0, -2 + i * 1.5),
-			Material = Enum.Material.SmoothPlastic,
-			Color = (i % 2 == 0) and skin or Color3.fromRGB(80, 120, 85),
-		})
-	end
-	weldPart(model, root, {
-		Name = "Fin",
-		Size = Vector3.new(0.2, 0.9, 6),
-		CFrame = CFrame.new(0, 1, 1.2),
+	local root = makeRoot(model, Vector3.new(2.4, 2.4, 4))
+	local skin1 = Color3.fromRGB(70, 92, 48)
+	local skin2 = Color3.fromRGB(110, 120, 55)
+	local head = mk(model, {
+		Name = "Head",
+		Size = Vector3.new(1.5, 1.7, 2.8),
+		CFrame = CFrame.new(),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(150, 200, 120),
+		Color = skin1,
+		Mesh = SPHERE,
 	})
-	eye(model, root, Vector3.new(-0.7, 0.4, -2.6), Color3.fromRGB(255, 240, 60), 0.45)
-	eye(model, root, Vector3.new(0.7, 0.4, -2.6), Color3.fromRGB(255, 240, 60), 0.45)
+	weld(root, head)
+	local jaw = mk(model, {
+		Name = "Jaw",
+		Size = Vector3.new(1.2, 0.55, 2),
+		CFrame = CFrame.new(0, -0.65, -0.55) * CFrame.Angles(0.35, 0, 0),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(160, 160, 90),
+		Mesh = SPHERE,
+	})
+	weld(head, jaw)
+	local mouth = mk(model, {
+		Name = "Mouth",
+		Size = Vector3.new(0.95, 0.45, 1.6),
+		CFrame = CFrame.new(0, -0.42, -0.75),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(90, 15, 20),
+		Mesh = SPHERE,
+	})
+	weld(head, mouth)
+	for i = 1, 4 do
+		for _, side in ipairs({ -1, 1 }) do
+			local tooth = mk(model, {
+				Name = "Tooth",
+				Size = Vector3.new(0.1, 0.32, 0.1),
+				CFrame = CFrame.new(side * (0.42 - i * 0.04), -0.5, -1.4 + i * 0.28),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(250, 250, 235),
+				Mesh = SPHERE,
+			})
+			weld(head, tooth)
+		end
+	end
+	eyePair(model, head, 0.55, 0.45, -0.75, 0.45, Color3.fromRGB(255, 230, 50), true)
+	-- body segments, each on a joint, getting thinner towards the tail
+	local prev = head
+	local prevHalf = 1.2
+	for i = 1, 8 do
+		local w = 1.5 - i * 0.12
+		local h = 1.7 - i * 0.14
+		local seg = mk(model, {
+			Name = "Segment",
+			Size = Vector3.new(w, h, 2.3),
+			Material = Enum.Material.SmoothPlastic,
+			Color = (i % 2 == 0) and skin1 or skin2,
+			Mesh = SPHERE,
+		})
+		joint(prev, seg, CFrame.new(0, 0, prevHalf), CFrame.new(0, 0, -0.95), { 0.32, 7, -i * 0.75, "Y" })
+		local fin = mk(model, {
+			Name = "Fin",
+			Size = Vector3.new(0.1, h * 0.55, 2.2),
+			CFrame = seg.CFrame * CFrame.new(0, h * 0.48, 0),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(150, 160, 80),
+			Transparency = 0.2,
+			Mesh = SPHERE,
+		})
+		weld(seg, fin)
+		-- a few glowing spots so eels show up in the dark
+		if i % 3 == 1 then
+			for _, side in ipairs({ -1, 1 }) do
+				local spot = mk(model, {
+					Name = "GlowSpot",
+					Size = Vector3.new(0.15, 0.3, 0.3),
+					CFrame = seg.CFrame * CFrame.new(side * w * 0.48, 0, 0),
+					Material = Enum.Material.Neon,
+					Color = Color3.fromRGB(120, 255, 200),
+					Mesh = SPHERE,
+				})
+				weld(seg, spot)
+			end
+		end
+		prev = seg
+		prevHalf = 0.95
+	end
 	return model, root
 end
 
@@ -496,7 +738,7 @@ local function stepMonster(m, dt, subs, now)
 	m.Vel = m.Vel:Lerp(targetVel, math.clamp(dt * 3, 0, 1))
 	m.Pos = clampToWater(m.Pos + m.Vel * dt)
 	local look = m.Vel.Magnitude > 0.5 and m.Vel.Unit or Vector3.new(0, 0, -1)
-	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 10 + m.Phase) * 0.18
+	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 3 + m.Phase) * 0.06
 	if math.abs(look.Y) > 0.98 then
 		m.CF = CFrame.new(m.Pos)
 	else

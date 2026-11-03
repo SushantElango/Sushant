@@ -1,4 +1,19 @@
-<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX00000001"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="ReplicatedStorage" referent="RBX00000003"><Properties><string name="Name">ReplicatedStorage</string></Properties><Item class="ModuleScript" referent="RBX00000002"><Properties><string name="Name">DeepDiveConfig</string><ProtectedString name="Source"><![CDATA[--[[
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX00000001"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="ServerScriptService" referent="RBX00000003"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX00000002"><Properties><string name="Name">DeepDiveServer</string><ProtectedString name="Source"><![CDATA[--[[
+	DEEP DIVE - SERVER SCRIPT
+	=========================
+	WHERE: Explorer > ServerScriptService > (+) Script   (a normal Script)
+	Paste this WHOLE file into it. Also make the LocalScript from
+	DeepDive_Client.lua (StarterPlayer > StarterPlayerScripts).
+
+	All game settings (prices, health, speeds, loot...) are in the
+	"CONFIG" section right below. Search for "Config." to find a setting.
+]]
+
+------------------------------------------------------------------------
+-- CONFIG
+------------------------------------------------------------------------
+local DeepDiveConfig = (function()
+--[[
 	DeepDiveConfig  (ModuleScript)
 	LOCATION: ReplicatedStorage > DeepDiveConfig
 
@@ -536,7 +551,10 @@ function Config.FormatNumber(n)
 end
 
 return Config
-]]></ProtectedString></Properties></Item></Item><Item class="ServerScriptService" referent="RBX00000009"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="ModuleScript" referent="RBX00000004"><Properties><string name="Name">WorldBuilder</string><ProtectedString name="Source"><![CDATA[--[[
+end)()
+
+local WorldBuilderModule = (function()
+--[[
 	WorldBuilder  (ModuleScript)
 	LOCATION: ServerScriptService > WorldBuilder
 
@@ -554,7 +572,7 @@ return Config
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Lighting = game:GetService("Lighting")
 
-local Config = require(ReplicatedStorage:WaitForChild("DeepDiveConfig"))
+local Config = DeepDiveConfig
 
 local S = Config.SURFACE_Y
 local WorldBuilder = {}
@@ -579,9 +597,18 @@ local function part(props)
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
 	for k, v in pairs(props) do
-		if k ~= "Parent" then
+		if k ~= "Parent" and k ~= "Mesh" and k ~= "Sway" then
 			p[k] = v
 		end
+	end
+	if props.Mesh then
+		-- SpecialMesh sphere = smooth rounded shape instead of a box
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = props.Mesh
+		m.Parent = p
+	end
+	if props.Sway then
+		p:SetAttribute("Sway", props.Sway) -- clients gently sway these (kelp, sea fans)
 	end
 	p.Parent = props.Parent
 	return p
@@ -670,6 +697,7 @@ end
 local terrainParams = RaycastParams.new()
 terrainParams.FilterType = Enum.RaycastFilterType.Include
 terrainParams.FilterDescendantsInstances = { workspace.Terrain }
+terrainParams.IgnoreWater = true
 function WorldBuilder.RealFloorY(x, z)
 	local guess = WorldBuilder.FloorY(x, z)
 	local result = workspace:Raycast(Vector3.new(x, guess + 40, z), Vector3.new(0, -90, 0), terrainParams)
@@ -701,6 +729,14 @@ end
 local function buildTerrain()
 	local terrain = workspace.Terrain
 	terrain:Clear()
+	-- realistic ocean water (waves, reflections, underwater blur)
+	pcall(function()
+		terrain.WaterColor = Color3.fromRGB(22, 92, 120)
+		terrain.WaterTransparency = 0.55
+		terrain.WaterReflectance = 0.6
+		terrain.WaterWaveSize = 0.25
+		terrain.WaterWaveSpeed = 10
+	end)
 	-- Smooth terrain: write voxels with partial "occupancy" so the floor is
 	-- a smooth surface instead of big stepped blocks.
 	local RES = 4
@@ -761,6 +797,11 @@ local function buildTerrain()
 								mat = d < 200 and Enum.Material.Sandstone or Enum.Material.Basalt -- deeper underground
 							end
 						end
+						-- below sea level, empty space becomes real ocean water
+						if yBottom + RES <= S and occ < 0.5 then
+							mat = Enum.Material.Water
+							occ = 1
+						end
 						mRow[iz] = mat
 						oRow[iz] = occ
 					end
@@ -768,6 +809,14 @@ local function buildTerrain()
 			end
 			local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x0 + CHUNK, y1, z0 + CHUNK))
 			terrain:WriteVoxels(region, RES, materials, occupancy)
+			-- fill the rest of this column with water up to the surface
+			if y1 < S then
+				terrain:FillBlock(
+					CFrame.new(x0 + CHUNK / 2, (y1 + S) / 2, z0 + CHUNK / 2),
+					Vector3.new(CHUNK, S - y1, CHUNK),
+					Enum.Material.Water
+				)
+			end
 			count += 1
 			if count % 8 == 0 then
 				task.wait()
@@ -1232,11 +1281,24 @@ local function buildReef(root)
 			local s = rng:NextNumber(3, 6)
 			deco({
 				Name = "BrainCoral",
-				Shape = Enum.PartType.Ball,
-				Size = Vector3.new(s, s, s),
-				CFrame = CFrame.new(x, fy + s * 0.25, z),
+				Size = Vector3.new(s, s * 0.65, s * rng:NextNumber(0.8, 1.1)),
+				CFrame = CFrame.new(x, fy + s * 0.15, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
 				Material = Enum.Material.Pebble,
 				Color = color,
+				Mesh = Enum.MeshType.Sphere,
+				Parent = reef,
+			})
+			-- a sea fan next to it
+			local fh = rng:NextNumber(3, 6)
+			deco({
+				Name = "SeaFan",
+				Size = Vector3.new(0.15, fh, fh * 0.9),
+				CFrame = CFrame.new(x + s * 0.6, fy + fh * 0.45, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
+				Material = Enum.Material.Fabric,
+				Color = CORAL_COLORS[rng:NextInteger(1, #CORAL_COLORS)],
+				Transparency = 0.1,
+				Mesh = Enum.MeshType.Sphere,
+				Sway = fh,
 				Parent = reef,
 			})
 		else
@@ -1262,16 +1324,22 @@ local function buildReef(root)
 		local x = rng:NextNumber(-420, 420)
 		local z = rng:NextNumber(-60, 280)
 		local fy = WorldBuilder.RealFloorY(x, z)
-		local h = rng:NextNumber(14, 32)
-		deco({
-			Name = "Kelp",
-			Size = Vector3.new(0.5, h, 1.6),
-			CFrame = CFrame.new(x, fy + h / 2, z) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), rng:NextNumber(0, 3), 0),
-			Material = Enum.Material.Grass,
-			Color = Color3.fromRGB(60, rng:NextInteger(120, 160), 60),
-			Transparency = 0.1,
-			Parent = reef,
-		})
+		-- each kelp plant is a few long leafy blades that sway in the current
+		for blade = 1, 3 do
+			local h = rng:NextNumber(12, 30)
+			deco({
+				Name = "Kelp",
+				Size = Vector3.new(0.3, h, 1.8),
+				CFrame = CFrame.new(x + rng:NextNumber(-1.2, 1.2), fy + h / 2 - 0.5, z + rng:NextNumber(-1.2, 1.2))
+					* CFrame.Angles(rng:NextNumber(-0.1, 0.1), blade * 1.1, rng:NextNumber(-0.1, 0.1)),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(rng:NextInteger(50, 90), rng:NextInteger(115, 150), 45),
+				Transparency = 0.05,
+				Mesh = Enum.MeshType.Sphere,
+				Sway = h,
+				Parent = reef,
+			})
+		end
 	end
 
 	-- Shipwreck on the reef
@@ -1474,16 +1542,7 @@ end
 -- Water + lighting
 ------------------------------------------------------------------------
 local function buildWater(root)
-	local water = deco({
-		Name = "WaterSurface",
-		Size = Vector3.new(2048, 1, 2048),
-		CFrame = CFrame.new(0, S, 340),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(30, 130, 180),
-		Transparency = 0.3,
-		Parent = root,
-	})
-	_ = water
+	-- (the water itself is real Terrain water, made in buildTerrain)
 
 	-- Invisible safety walls around the ocean (terrain walls are the real ones)
 	local walls = {
@@ -1542,35 +1601,40 @@ function WorldBuilder.Build()
 end
 
 return WorldBuilder
-]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">SubBuilder</string><ProtectedString name="Source"><![CDATA[--[[
+end)()
+
+local SubBuilderModule = (function()
+--[[
 	SubBuilder  (ModuleScript)
 	LOCATION: ServerScriptService > SubBuilder
 
-	Builds a submarine model out of parts. The look depends on the hull tier
-	(bigger hulls = longer sub with more crew seats) and the player's paint.
+	Builds a research submarine out of rounded parts (SpecialMesh spheres
+	make smooth, curved shapes - no blocky boxes). Bigger hull tier = longer
+	sub with more crew seats.
 
 	Every sub has:
-	  Root       invisible centre part (PrimaryPart) that physics moves
-	  Drive      LinearVelocity  -> how fast the sub moves
-	  Steer      AlignOrientation -> which way the sub faces
-	  Seats      one per crew station (Helm is a VehicleSeat)
-	  Barrel     harpoon turret barrel on a Motor6D so it can aim
-	  Headlight  SpotLight on the nose
-	  BoardPrompt  "Board Sub" ProximityPrompt
+	  Root        invisible centre part (PrimaryPart) that physics moves
+	  Drive       LinearVelocity   -> how fast the sub moves
+	  Steer       AlignOrientation -> which way the sub faces
+	  Seats       one per crew station (Helm is a VehicleSeat)
+	  Barrel      harpoon turret barrel on a Motor6D so it can aim
+	  PropMotor   Motor6D the clients spin to animate the propeller
+	  Lamps       two headlights with SpotLights named "Beam"
+	  BoardPrompt "Board Sub" ProximityPrompt
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Config = require(ReplicatedStorage:WaitForChild("DeepDiveConfig"))
+local Config = DeepDiveConfig
 
 local SubBuilder = {}
 
 local SEAT_LAYOUTS = {
-	-- {station, x, z-as-fraction-of-length}
-	[2] = { { "Helm", 0, -0.2 }, { "Turret", 0, 0.2 } },
-	[4] = { { "Helm", 0, -0.3 }, { "Turret", 0, -0.02 }, { "Sonar", -1.6, 0.25 }, { "Repair", 1.6, 0.25 } },
+	-- {station, x, z as a fraction of hull length}
+	[2] = { { "Helm", 0, -0.26 }, { "Turret", 0, 0.08 } },
+	[4] = { { "Helm", 0, -0.3 }, { "Turret", 0, -0.06 }, { "Sonar", -1.5, 0.16 }, { "Repair", 1.5, 0.16 } },
 }
 
-local function newPart(model, root, props, collide)
+local function newPart(model, root, props, collide, attachTo)
 	local p = Instance.new("Part")
 	p.Anchored = false
 	p.Massless = true
@@ -1579,16 +1643,25 @@ local function newPart(model, root, props, collide)
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
 	p.CastShadow = false
+	local mesh = props.Mesh
+	props.Mesh = nil
 	for k, v in pairs(props) do
 		p[k] = v
 	end
+	if mesh then
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = mesh
+		m.Parent = p
+	end
 	p.Parent = model
 	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = root
+	weld.Part0 = attachTo or root
 	weld.Part1 = p
 	weld.Parent = p
 	return p
 end
+
+local SPHERE = Enum.MeshType.Sphere
 
 -- Builds the sub at the world origin; call model:PivotTo() afterwards.
 function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
@@ -1596,9 +1669,11 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	local L = hull.Length
 	local D = hull.Diameter
 	local R = D / 2
+	local HL = L + D -- full nose-to-tail length
 	local mat = hull.Material or Enum.Material.SmoothPlastic
-	local accent = Color3.fromRGB(235, 235, 240)
-	local dark = Color3.fromRGB(45, 48, 58)
+	local accent = Color3.fromRGB(230, 232, 238)
+	local dark = Color3.fromRGB(40, 44, 52)
+	local brass = Color3.fromRGB(205, 170, 85)
 
 	local model = Instance.new("Model")
 	model.Name = ownerName .. "'s Sub"
@@ -1620,13 +1695,12 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	rootAtt.Name = "RootAttachment"
 	rootAtt.Parent = root
 
-	-- Physics movers (the pilot's client drives these)
 	local drive = Instance.new("LinearVelocity")
 	drive.Name = "Drive"
 	drive.Attachment0 = rootAtt
 	drive.RelativeTo = Enum.ActuatorRelativeTo.World
 	drive.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-	drive.MaxForce = 80000
+	drive.MaxForce = 90000
 	drive.VectorVelocity = Vector3.zero
 	drive.Parent = root
 
@@ -1639,215 +1713,302 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	steer.CFrame = CFrame.new()
 	steer.Parent = root
 
-	-- Body (cylinder lying along the sub's length)
-	local alongZ = CFrame.Angles(0, math.rad(90), 0)
+	-- Main hull: one smooth teardrop-ish ellipsoid
 	local body = newPart(model, root, {
 		Name = "Body",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(L, D, D),
-		CFrame = alongZ,
+		Size = Vector3.new(D, D * 0.92, HL),
+		CFrame = CFrame.new(),
 		Material = mat,
 		Color = paintColor,
+		Mesh = SPHERE,
 	}, true)
 	body:SetAttribute("Paint", true)
 
-	-- Glass cockpit nose
+	-- Dark belly (keel) so the hull has two-tone shading
 	newPart(model, root, {
-		Name = "Nose",
+		Name = "Belly",
+		Size = Vector3.new(D * 0.97, D * 0.62, HL * 0.95),
+		CFrame = CFrame.new(0, -D * 0.17, 0.05),
+		Material = Enum.Material.SmoothPlastic,
+		Color = dark,
+		Mesh = SPHERE,
+	})
+	-- Waterline stripe
+	newPart(model, root, {
+		Name = "Stripe",
+		Size = Vector3.new(D * 1.005, D * 0.08, HL * 0.9),
+		CFrame = CFrame.new(0, -D * 0.06, 0),
+		Material = Enum.Material.SmoothPlastic,
+		Color = accent,
+		Mesh = SPHERE,
+	})
+
+	-- Glass cockpit bubble at the front
+	local bubbleZ = -HL / 2 + D * 0.3
+	newPart(model, root, {
+		Name = "Cockpit",
 		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(D, D, D),
-		CFrame = CFrame.new(0, 0, -L / 2),
+		Size = Vector3.new(D * 0.8, D * 0.8, D * 0.8),
+		CFrame = CFrame.new(0, D * 0.06, bubbleZ),
 		Material = Enum.Material.Glass,
-		Color = Color3.fromRGB(150, 220, 255),
+		Color = Color3.fromRGB(170, 225, 255),
 		Transparency = 0.35,
+		Reflectance = 0.15,
 	}, true)
-
-	-- Tail
-	local tail = newPart(model, root, {
-		Name = "Tail",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(D * 0.96, D * 0.96, D * 0.96),
-		CFrame = CFrame.new(0, 0, L / 2),
-		Material = mat,
-		Color = paintColor,
-	}, true)
-	tail:SetAttribute("Paint", true)
-
-	-- Accent stripes
-	for _, f in ipairs({ -0.32, 0.32 }) do
-		newPart(model, root, {
-			Name = "Stripe",
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.7, D + 0.12, D + 0.12),
-			CFrame = CFrame.new(0, 0, L * f) * alongZ,
-			Material = Enum.Material.SmoothPlastic,
-			Color = accent,
-		})
-	end
+	newPart(model, root, {
+		Name = "CockpitRim",
+		Size = Vector3.new(D * 0.86, D * 0.86, D * 0.12),
+		CFrame = CFrame.new(0, D * 0.06, bubbleZ + D * 0.22),
+		Material = Enum.Material.Metal,
+		Color = dark,
+		Mesh = SPHERE,
+	})
 
 	-- Conning tower (sail)
-	local sailH = 2.4 + R * 0.35
+	local sailZ = HL * 0.04
 	local sail = newPart(model, root, {
 		Name = "Sail",
-		Size = Vector3.new(D * 0.36, sailH, L * 0.3),
-		CFrame = CFrame.new(0, R + sailH / 2 - 0.6, L * 0.06),
+		Size = Vector3.new(D * 0.32, D * 0.62, HL * 0.3),
+		CFrame = CFrame.new(0, D * 0.5, sailZ),
 		Material = mat,
 		Color = paintColor,
+		Mesh = SPHERE,
 	}, true)
 	sail:SetAttribute("Paint", true)
 	newPart(model, root, {
-		Name = "Hatch",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(0.4, D * 0.3, D * 0.3),
-		CFrame = CFrame.new(0, R + sailH - 0.4, L * 0.06) * CFrame.Angles(0, 0, math.rad(90)),
-		Material = Enum.Material.Metal,
-		Color = dark,
+		Name = "SailPlanes",
+		Size = Vector3.new(D * 0.85, 0.16, D * 0.26),
+		CFrame = CFrame.new(0, D * 0.56, sailZ - HL * 0.04),
+		Material = mat,
+		Color = accent,
+		Mesh = SPHERE,
 	})
 	newPart(model, root, {
 		Name = "Periscope",
-		Size = Vector3.new(0.35, 2.4, 0.35),
-		CFrame = CFrame.new(0, R + sailH + 0.6, L * 0.06 + 1),
-		Material = Enum.Material.Metal,
-		Color = dark,
-	})
-
-	-- Fins
-	newPart(model, root, {
-		Name = "TailFinV",
-		Size = Vector3.new(0.4, D * 0.55, D * 0.45),
-		CFrame = CFrame.new(0, R * 0.75, L / 2 + R * 0.35),
-		Material = mat,
-		Color = accent,
-	})
-	newPart(model, root, {
-		Name = "TailFinH",
-		Size = Vector3.new(D * 1.15, 0.4, D * 0.4),
-		CFrame = CFrame.new(0, 0, L / 2 + R * 0.4),
-		Material = mat,
-		Color = accent,
-	})
-	newPart(model, root, {
-		Name = "SideFins",
-		Size = Vector3.new(D * 1.5, 0.35, D * 0.35),
-		CFrame = CFrame.new(0, -R * 0.2, -L * 0.22),
-		Material = mat,
-		Color = accent,
-	})
-
-	-- Propeller
-	local propZ = L / 2 + R + 0.2
-	newPart(model, root, {
-		Name = "PropHub",
 		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(1.2, 1.4, 1.4),
-		CFrame = CFrame.new(0, 0, propZ) * alongZ,
+		Size = Vector3.new(D * 0.32, 0.22, 0.22),
+		CFrame = CFrame.new(0, D * 0.86, sailZ - 0.3) * CFrame.Angles(0, 0, math.rad(90)),
 		Material = Enum.Material.Metal,
 		Color = dark,
 	})
-	for i = 0, 2 do
+	newPart(model, root, {
+		Name = "Antenna",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(D * 0.45, 0.08, 0.08),
+		CFrame = CFrame.new(0, D * 0.92, sailZ + 0.6) * CFrame.Angles(0, 0, math.rad(90)),
+		Material = Enum.Material.Metal,
+		Color = dark,
+	})
+	newPart(model, root, {
+		Name = "Beacon",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(0.35, 0.35, 0.35),
+		CFrame = CFrame.new(0, D * 0.92 + D * 0.23, sailZ + 0.6),
+		Material = Enum.Material.Neon,
+		Color = Color3.fromRGB(255, 50, 50),
+	})
+
+	-- Side ballast tanks
+	for _, side in ipairs({ -1, 1 }) do
+		newPart(model, root, {
+			Name = "BallastTank",
+			Size = Vector3.new(D * 0.26, D * 0.26, HL * 0.6),
+			CFrame = CFrame.new(side * D * 0.45, -D * 0.22, HL * 0.06),
+			Material = Enum.Material.Metal,
+			Color = Color3.fromRGB(245, 190, 40),
+			Mesh = SPHERE,
+		})
+	end
+
+	-- Bow dive planes
+	newPart(model, root, {
+		Name = "BowPlanes",
+		Size = Vector3.new(D * 1.45, 0.16, D * 0.32),
+		CFrame = CFrame.new(0, -D * 0.02, -HL * 0.2),
+		Material = mat,
+		Color = accent,
+		Mesh = SPHERE,
+	})
+
+	-- Cross-shaped stern fins
+	local sternZ = HL / 2 - D * 0.2
+	newPart(model, root, {
+		Name = "FinV",
+		Size = Vector3.new(0.2, D * 1.05, D * 0.55),
+		CFrame = CFrame.new(0, 0, sternZ),
+		Material = mat,
+		Color = accent,
+		Mesh = SPHERE,
+	})
+	newPart(model, root, {
+		Name = "FinH",
+		Size = Vector3.new(D * 1.2, 0.2, D * 0.55),
+		CFrame = CFrame.new(0, 0, sternZ),
+		Material = mat,
+		Color = accent,
+		Mesh = SPHERE,
+	})
+
+	-- Ducted propeller (the duct is a ring of small curved pieces)
+	local propZ = HL / 2 + D * 0.08
+	local ductR = D * 0.3
+	local segs = 12
+	for i = 0, segs - 1 do
+		local a = i / segs * math.pi * 2
+		newPart(model, root, {
+			Name = "Duct",
+			Size = Vector3.new(0.22, (2 * math.pi * ductR / segs) * 1.15, D * 0.22),
+			CFrame = CFrame.new(math.cos(a) * ductR, math.sin(a) * ductR, propZ) * CFrame.Angles(0, 0, a),
+			Material = Enum.Material.Metal,
+			Color = dark,
+		})
+	end
+	local hub = Instance.new("Part")
+	hub.Name = "PropHub"
+	hub.Shape = Enum.PartType.Ball
+	hub.Size = Vector3.new(D * 0.16, D * 0.16, D * 0.16)
+	hub.Material = Enum.Material.Metal
+	hub.Color = brass
+	hub.Massless = true
+	hub.CanCollide = false
+	hub.CanTouch = false
+	hub.CastShadow = false
+	hub.CFrame = CFrame.new(0, 0, propZ)
+	hub.Parent = model
+	local propMotor = Instance.new("Motor6D")
+	propMotor.Name = "PropMotor"
+	propMotor.Part0 = root
+	propMotor.Part1 = hub
+	propMotor.C0 = CFrame.new(0, 0, propZ)
+	propMotor.Parent = root
+	for i = 0, 3 do
+		local a = i / 4 * math.pi * 2
 		newPart(model, root, {
 			Name = "PropBlade",
-			Size = Vector3.new(0.9, R * 0.9, 0.25),
-			CFrame = CFrame.new(0, 0, propZ + 0.2)
-				* CFrame.Angles(0, 0, math.rad(i * 120))
-				* CFrame.new(0, R * 0.45, 0),
+			Size = Vector3.new(0.1, ductR * 0.9, D * 0.13),
+			CFrame = CFrame.new(0, 0, propZ)
+				* CFrame.Angles(0, 0, a)
+				* CFrame.new(0, ductR * 0.5, 0)
+				* CFrame.Angles(0, 0.5, 0),
 			Material = Enum.Material.Metal,
-			Color = Color3.fromRGB(200, 170, 80),
-		})
+			Color = brass,
+			Mesh = SPHERE,
+		}, false, hub)
 	end
 	local propAtt = Instance.new("Attachment")
 	propAtt.Name = "PropAttachment"
-	propAtt.Position = Vector3.new(0, 0, propZ + 1.2)
+	propAtt.Position = Vector3.new(0, 0, propZ + 0.8)
 	propAtt.Parent = root
 	local bubbles = Instance.new("ParticleEmitter")
 	bubbles.Name = "PropBubbles"
 	bubbles.Texture = "rbxasset://textures/particles/smoke_main.dds"
-	bubbles.Color = ColorSequence.new(Color3.fromRGB(220, 245, 255))
-	bubbles.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1.4) })
-	bubbles.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1) })
-	bubbles.Lifetime = NumberRange.new(1, 1.8)
-	bubbles.Speed = NumberRange.new(2, 4)
-	bubbles.SpreadAngle = Vector2.new(25, 25)
+	bubbles.Color = ColorSequence.new(Color3.fromRGB(225, 245, 255))
+	bubbles.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 1.1) })
+	bubbles.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 1) })
+	bubbles.Lifetime = NumberRange.new(1.2, 2.2)
+	bubbles.Speed = NumberRange.new(2, 5)
+	bubbles.Acceleration = Vector3.new(0, 3, 0)
+	bubbles.SpreadAngle = Vector2.new(20, 20)
 	bubbles.EmissionDirection = Enum.NormalId.Back
 	bubbles.Rate = 0
-	bubbles.LightEmission = 0.2
+	bubbles.LightEmission = 0.15
 	bubbles.Parent = propAtt
 
-	-- Portholes (warm glow from inside)
-	for _, f in ipairs({ -0.15, 0.12 }) do
+	-- Portholes (warm glow from inside), placed on the curved hull surface
+	for _, f in ipairs({ -0.08, 0.12 }) do
+		local z = HL * f
+		local x = R * math.sqrt(math.max(0, 1 - (2 * z / HL) ^ 2)) * 0.98
 		for _, side in ipairs({ -1, 1 }) do
 			newPart(model, root, {
 				Name = "Porthole",
 				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(0.3, 1.5, 1.5),
-				CFrame = CFrame.new(side * (R - 0.05), 0.4, L * f),
+				Size = Vector3.new(0.2, D * 0.16, D * 0.16),
+				CFrame = CFrame.new(side * x, D * 0.08, z),
 				Material = Enum.Material.Neon,
-				Color = Color3.fromRGB(255, 220, 140),
+				Color = Color3.fromRGB(255, 215, 140),
 			})
 		end
 	end
 
-	-- Headlight
-	local lamp = newPart(model, root, {
-		Name = "Headlight",
-		Size = Vector3.new(1.6, 1.0, 0.5),
-		CFrame = CFrame.new(0, -R * 0.62, -L / 2 - R * 0.72),
-		Material = Enum.Material.Neon,
-		Color = lightColor,
-	})
-	local spot = Instance.new("SpotLight")
-	spot.Name = "Beam"
-	spot.Face = Enum.NormalId.Front
-	spot.Range = 32
-	spot.Angle = 50
-	spot.Brightness = 3
-	spot.Color = lightColor
-	spot.Shadows = true
-	spot.Parent = lamp
+	-- Twin headlights
+	for i, side in ipairs({ -1, 1 }) do
+		local lampPos = Vector3.new(side * D * 0.3, -D * 0.2, -HL / 2 + D * 0.12)
+		newPart(model, root, {
+			Name = "LampHousing",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(D * 0.12, D * 0.14, D * 0.14),
+			CFrame = CFrame.new(lampPos + Vector3.new(0, 0, D * 0.05)) * CFrame.Angles(0, math.rad(90), 0),
+			Material = Enum.Material.Metal,
+			Color = dark,
+		})
+		local lamp = newPart(model, root, {
+			Name = i == 1 and "Headlight" or "Headlight2",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.12, D * 0.12, D * 0.12),
+			CFrame = CFrame.new(lampPos) * CFrame.Angles(0, math.rad(90), 0),
+			Material = Enum.Material.Neon,
+			Color = lightColor,
+		})
+		lamp:SetAttribute("Lamp", true)
+		local spot = Instance.new("SpotLight")
+		spot.Name = "Beam"
+		-- the lamp is turned 90 degrees, so its Right (+X) face points forward
+		spot.Face = Enum.NormalId.Right
+		spot.Range = 32
+		spot.Angle = 50
+		spot.Brightness = 3
+		spot.Color = lightColor
+		spot.Shadows = i == 1
+		spot.Parent = lamp
+	end
 	local glow = Instance.new("PointLight")
 	glow.Name = "HullGlow"
-	glow.Range = 13
-	glow.Brightness = 0.7
+	glow.Range = 14
+	glow.Brightness = 0.6
 	glow.Color = Color3.fromRGB(255, 225, 180)
 	glow.Parent = body
 
-	-- Harpoon turret
-	local turretZ = -L * 0.3
+	-- Harpoon turret on the bow
+	local turretZ = -HL * 0.22
+	local turretY = D * 0.44
 	newPart(model, root, {
 		Name = "TurretBase",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(0.8, 2.2, 2.2),
-		CFrame = CFrame.new(0, R + 0.1, turretZ) * CFrame.Angles(0, 0, math.rad(90)),
+		Size = Vector3.new(D * 0.28, D * 0.16, D * 0.28),
+		CFrame = CFrame.new(0, turretY, turretZ),
 		Material = Enum.Material.Metal,
 		Color = dark,
+		Mesh = SPHERE,
 	})
 	local barrel = Instance.new("Part")
 	barrel.Name = "Barrel"
-	barrel.Size = Vector3.new(0.55, 0.55, 3.4)
+	barrel.Size = Vector3.new(0.45, 0.45, 3.2)
 	barrel.Material = Enum.Material.Metal
-	barrel.Color = Color3.fromRGB(70, 75, 85)
+	barrel.Color = Color3.fromRGB(80, 85, 95)
 	barrel.Massless = true
 	barrel.CanCollide = false
 	barrel.CanTouch = false
 	barrel.CastShadow = false
-	barrel.CFrame = CFrame.new(0, R + 0.9, turretZ - 1.5)
+	barrel.CFrame = CFrame.new(0, turretY + 0.35, turretZ - 1.4)
 	barrel.Parent = model
+	local barrelMesh = Instance.new("SpecialMesh")
+	barrelMesh.MeshType = Enum.MeshType.Sphere
+	barrelMesh.Parent = barrel
 	local motor = Instance.new("Motor6D")
 	motor.Name = "TurretMotor"
 	motor.Part0 = root
 	motor.Part1 = barrel
-	motor.C0 = CFrame.new(0, R + 0.9, turretZ)
-	motor.C1 = CFrame.new(0, 0, 1.5)
+	motor.C0 = CFrame.new(0, turretY + 0.35, turretZ)
+	motor.C1 = CFrame.new(0, 0, 1.4)
 	motor.Parent = root
 	local tip = Instance.new("Attachment")
 	tip.Name = "Tip"
-	tip.Position = Vector3.new(0, 0, -1.8)
+	tip.Position = Vector3.new(0, 0, -1.7)
 	tip.Parent = barrel
-	model:SetAttribute("TurretPivot", Vector3.new(0, R + 0.9, turretZ))
+	model:SetAttribute("TurretPivot", Vector3.new(0, turretY + 0.35, turretZ))
 
 	-- Seats (inside the hull)
 	local layout = SEAT_LAYOUTS[#hull.Seats] or SEAT_LAYOUTS[2]
-	local seatY = -R + 1.0
+	local seatY = -R + 1.1
 	for _, info in ipairs(layout) do
 		local station = info[1]
 		local seat
@@ -1867,7 +2028,7 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 		seat.CanTouch = false -- boarding happens through the prompt only
 		seat.Massless = true
 		seat.Anchored = false
-		seat.CFrame = CFrame.new(info[2], seatY, L * info[3])
+		seat.CFrame = CFrame.new(info[2], seatY, HL * info[3])
 		seat:SetAttribute("Station", station)
 		seat.Parent = model
 		local weld = Instance.new("WeldConstraint")
@@ -1879,7 +2040,7 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	-- Name tag
 	local tagAtt = Instance.new("Attachment")
 	tagAtt.Name = "TagAttachment"
-	tagAtt.Position = Vector3.new(0, R + sailH + 3, 0)
+	tagAtt.Position = Vector3.new(0, D * 1.3, 0)
 	tagAtt.Parent = root
 	local tag = Instance.new("BillboardGui")
 	tag.Name = "NameTag"
@@ -1907,7 +2068,7 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	prompt.ActionText = "Board Sub"
 	prompt.ObjectText = ownerName .. "'s Sub"
 	prompt.KeyboardKeyCode = Enum.KeyCode.E
-	prompt.MaxActivationDistance = math.max(16, L * 0.8)
+	prompt.MaxActivationDistance = math.max(16, HL * 0.7)
 	prompt.RequiresLineOfSight = false
 	prompt.HoldDuration = 0
 	prompt.Parent = promptAtt
@@ -1921,23 +2082,40 @@ end
 -- Applies paint + light colour to an existing sub (no rebuild needed).
 function SubBuilder.ApplyLook(model, paintColor, lightColor, shiny)
 	for _, p in ipairs(model:GetDescendants()) do
-		if p:IsA("BasePart") and p:GetAttribute("Paint") then
-			p.Color = paintColor
-			p.Reflectance = shiny and 0.25 or 0
+		if p:IsA("BasePart") then
+			if p:GetAttribute("Paint") then
+				p.Color = paintColor
+				p.Reflectance = shiny and 0.25 or 0
+			elseif p:GetAttribute("Lamp") then
+				p.Color = lightColor
+				local beam = p:FindFirstChild("Beam")
+				if beam then
+					beam.Color = lightColor
+				end
+			end
 		end
 	end
-	local lamp = model:FindFirstChild("Headlight")
-	if lamp then
-		lamp.Color = lightColor
-		local beam = lamp:FindFirstChild("Beam")
-		if beam then
-			beam.Color = lightColor
+end
+
+-- Sets headlight range/brightness on every lamp.
+function SubBuilder.ApplyLights(model, range, angle, brightness)
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") and p:GetAttribute("Lamp") then
+			local beam = p:FindFirstChild("Beam")
+			if beam then
+				beam.Range = range
+				beam.Angle = angle
+				beam.Brightness = brightness
+			end
 		end
 	end
 end
 
 return SubBuilder
-]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">PlayerData</string><ProtectedString name="Source"><![CDATA[--[[
+end)()
+
+local PlayerDataModule = (function()
+--[[
 	PlayerData  (ModuleScript)
 	LOCATION: ServerScriptService > PlayerData
 
@@ -2143,7 +2321,10 @@ function PlayerData.StartAutosave()
 end
 
 return PlayerData
-]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Monsters</string><ProtectedString name="Source"><![CDATA[--[[
+end)()
+
+local MonstersModule = (function()
+--[[
 	Monsters  (ModuleScript)
 	LOCATION: ServerScriptService > Monsters
 
@@ -2160,7 +2341,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 
-local Config = require(ReplicatedStorage:WaitForChild("DeepDiveConfig"))
+local Config = DeepDiveConfig
 
 local S = Config.SURFACE_Y
 local Monsters = {}
@@ -2174,8 +2355,12 @@ local nextId = 0
 ------------------------------------------------------------------------
 -- Models
 ------------------------------------------------------------------------
-local function weldPart(model, root, props)
-	local p = Instance.new("Part")
+local SPHERE = Enum.MeshType.Sphere
+
+-- Makes one body part. Mesh = Sphere turns a box into a smooth ellipsoid.
+local function mk(model, props)
+	local p = Instance.new(props.Class or "Part")
+	props.Class = nil
 	p.Anchored = false
 	p.Massless = true
 	p.CanCollide = false
@@ -2184,15 +2369,49 @@ local function weldPart(model, root, props)
 	p.CastShadow = false
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	local mesh = props.Mesh
+	local pulse = props.Pulse
+	props.Mesh = nil
+	props.Pulse = nil
 	for k, v in pairs(props) do
 		p[k] = v
 	end
+	if mesh then
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = mesh
+		if pulse then
+			m:SetAttribute("Pulse", true)
+		end
+		m.Parent = p
+	end
 	p.Parent = model
-	local w = Instance.new("WeldConstraint")
-	w.Part0 = root
-	w.Part1 = p
-	w.Parent = p
 	return p
+end
+
+local function weld(a, b)
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = a
+	w.Part1 = b
+	w.Parent = b
+end
+
+-- A moving joint. Clients read Amp/Freq/Phase/Axis and animate it
+-- (tails swish, tentacles sway, eels slither).
+local function joint(part0, part1, c0, c1, wave)
+	local j = Instance.new("Motor6D")
+	j.Part0 = part0
+	j.Part1 = part1
+	j.C0 = c0
+	j.C1 = c1 or CFrame.new()
+	if wave then
+		j:SetAttribute("Amp", wave[1])
+		j:SetAttribute("Freq", wave[2])
+		j:SetAttribute("Phase", wave[3] or 0)
+		j:SetAttribute("Axis", wave[4] or "Y")
+	end
+	part1.CFrame = part0.CFrame * j.C0 * j.C1:Inverse()
+	j.Parent = part0
+	return j
 end
 
 local function makeRoot(model, size)
@@ -2210,125 +2429,329 @@ local function makeRoot(model, size)
 	return root
 end
 
-local function eye(model, root, pos, color, size)
-	weldPart(model, root, {
-		Name = "Eye",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(size, size, size),
-		CFrame = CFrame.new(pos),
-		Material = Enum.Material.Neon,
-		Color = color,
-	})
+local function eyePair(model, body, x, y, z, size, irisColor, glow)
+	for _, side in ipairs({ -1, 1 }) do
+		local white = mk(model, {
+			Name = "Eye",
+			Size = Vector3.new(size * 0.7, size, size),
+			CFrame = body.CFrame * CFrame.new(side * x, y, z),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(240, 235, 220),
+			Mesh = SPHERE,
+		})
+		weld(body, white)
+		local iris = mk(model, {
+			Name = "Iris",
+			Size = Vector3.new(size * 0.4, size * 0.62, size * 0.62),
+			CFrame = body.CFrame * CFrame.new(side * (x + size * 0.2), y, z - size * 0.05),
+			Material = glow and Enum.Material.Neon or Enum.Material.SmoothPlastic,
+			Color = irisColor,
+			Mesh = SPHERE,
+		})
+		weld(body, iris)
+		local pupil = mk(model, {
+			Name = "Pupil",
+			Size = Vector3.new(size * 0.25, size * 0.45, size * 0.18),
+			CFrame = body.CFrame * CFrame.new(side * (x + size * 0.32), y, z - size * 0.05),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(10, 10, 12),
+			Mesh = SPHERE,
+		})
+		weld(body, pupil)
+	end
 end
 
 local Builders = {}
 
+-- Piranha-like biter: chunky body, big underbite full of teeth, swishing tail
 function Builders.BiterFish()
 	local model = Instance.new("Model")
 	model.Name = "BiterFish"
 	local root = makeRoot(model, Vector3.new(3, 3, 4))
-	local skin = Color3.fromRGB(220, 110, 50)
-	weldPart(model, root, {
+	local body = mk(model, {
 		Name = "Body",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(3, 3, 3),
-		CFrame = CFrame.new(0, 0, 0),
+		Size = Vector3.new(2.2, 2.9, 4),
+		CFrame = CFrame.new(),
 		Material = Enum.Material.SmoothPlastic,
-		Color = skin,
+		Color = Color3.fromRGB(200, 85, 45),
+		Mesh = SPHERE,
 	})
-	weldPart(model, root, {
+	weld(root, body)
+	local back = mk(model, {
+		Name = "Back",
+		Size = Vector3.new(1.8, 1.6, 3.6),
+		CFrame = CFrame.new(0, 0.72, 0.1),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(95, 60, 55),
+		Mesh = SPHERE,
+	})
+	weld(body, back)
+	local belly = mk(model, {
+		Name = "Belly",
+		Size = Vector3.new(1.9, 1.5, 3.2),
+		CFrame = CFrame.new(0, -0.7, -0.15),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(255, 170, 110),
+		Mesh = SPHERE,
+	})
+	weld(body, belly)
+	-- jaw (underbite) + dark mouth
+	local jaw = mk(model, {
 		Name = "Jaw",
-		Size = Vector3.new(2.2, 0.8, 1.6),
-		CFrame = CFrame.new(0, -0.8, -1.2),
+		Size = Vector3.new(1.7, 0.75, 1.6),
+		CFrame = CFrame.new(0, -0.95, -1.45) * CFrame.Angles(0.3, 0, 0),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(180, 80, 40),
+		Color = Color3.fromRGB(230, 120, 70),
+		Mesh = SPHERE,
 	})
-	for i = -1, 1 do
-		weldPart(model, root, {
+	weld(body, jaw)
+	local mouth = mk(model, {
+		Name = "Mouth",
+		Size = Vector3.new(1.2, 0.5, 0.5),
+		CFrame = CFrame.new(0, -0.6, -1.85),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(60, 10, 15),
+		Mesh = SPHERE,
+	})
+	weld(body, mouth)
+	for i = -2, 2 do
+		local up = mk(model, {
 			Name = "Tooth",
-			Size = Vector3.new(0.25, 0.5, 0.25),
-			CFrame = CFrame.new(i * 0.6, -0.3, -1.85),
+			Size = Vector3.new(0.14, 0.38, 0.14),
+			CFrame = CFrame.new(i * 0.22, -0.48, -1.98 + math.abs(i) * 0.08),
 			Material = Enum.Material.SmoothPlastic,
-			Color = Color3.new(1, 1, 1),
+			Color = Color3.fromRGB(250, 250, 240),
+			Mesh = SPHERE,
 		})
+		weld(body, up)
+		if i ~= 0 then
+			local down = mk(model, {
+				Name = "Tooth",
+				Size = Vector3.new(0.14, 0.34, 0.14),
+				CFrame = CFrame.new(i * 0.25, -0.82, -2.02 + math.abs(i) * 0.08),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(250, 250, 240),
+				Mesh = SPHERE,
+			})
+			weld(body, down)
+		end
 	end
-	weldPart(model, root, {
-		Name = "TailFin",
-		Size = Vector3.new(0.3, 2.2, 1.6),
-		CFrame = CFrame.new(0, 0, 2),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(255, 160, 60),
-	})
-	weldPart(model, root, {
+	eyePair(model, body, 0.9, 0.45, -1.1, 0.7, Color3.fromRGB(255, 40, 30), true)
+	-- fins
+	for _, side in ipairs({ -1, 1 }) do
+		local pec = mk(model, {
+			Name = "PectoralFin",
+			Size = Vector3.new(0.1, 0.8, 1.3),
+			CFrame = CFrame.new(side * 1.15, -0.45, -0.1) * CFrame.Angles(0, side * 0.5, side * 0.7),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(255, 140, 70),
+			Transparency = 0.25,
+			Mesh = SPHERE,
+		})
+		weld(body, pec)
+	end
+	local dorsal = mk(model, {
 		Name = "DorsalFin",
-		Size = Vector3.new(0.25, 1.2, 1.4),
-		CFrame = CFrame.new(0, 1.6, 0.2),
+		Size = Vector3.new(0.12, 1.3, 2),
+		CFrame = CFrame.new(0, 1.55, 0.5) * CFrame.Angles(-0.35, 0, 0),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(255, 160, 60),
+		Color = Color3.fromRGB(150, 70, 50),
+		Transparency = 0.15,
+		Mesh = SPHERE,
 	})
-	eye(model, root, Vector3.new(-0.9, 0.5, -1.0), Color3.fromRGB(255, 40, 40), 0.55)
-	eye(model, root, Vector3.new(0.9, 0.5, -1.0), Color3.fromRGB(255, 40, 40), 0.55)
+	weld(body, dorsal)
+	-- tail on a joint so it swishes
+	local stem = mk(model, {
+		Name = "TailStem",
+		Size = Vector3.new(0.8, 1.1, 1.3),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(190, 80, 45),
+		Mesh = SPHERE,
+	})
+	joint(body, stem, CFrame.new(0, 0, 1.75), CFrame.new(0, 0, -0.4), { 0.45, 12, 0, "Y" })
+	for _, side in ipairs({ -1, 1 }) do
+		local lobe = mk(model, {
+			Name = "TailFin",
+			Size = Vector3.new(0.12, 1.6, 1.3),
+			CFrame = stem.CFrame * CFrame.new(0, side * 0.55, 0.9) * CFrame.Angles(side * 0.6, 0, 0),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(255, 130, 60),
+			Transparency = 0.15,
+			Mesh = SPHERE,
+		})
+		weld(stem, lobe)
+	end
 	return model, root
 end
 
+-- Jellyfish: see-through pulsing bell, glowing core, swaying tentacles
 function Builders.Jellyfish()
 	local model = Instance.new("Model")
 	model.Name = "Jellyfish"
-	local root = makeRoot(model, Vector3.new(3.2, 4, 3.2))
-	local color = Color3.fromRGB(200, 120, 255)
-	local bell = weldPart(model, root, {
+	local root = makeRoot(model, Vector3.new(3.6, 5, 3.6))
+	local bell = mk(model, {
 		Name = "Bell",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(3.2, 3.2, 3.2),
-		CFrame = CFrame.new(0, 0.6, 0),
-		Material = Enum.Material.Neon,
-		Color = color,
+		Size = Vector3.new(3.6, 2.4, 3.6),
+		CFrame = CFrame.new(0, 0.8, 0),
+		Material = Enum.Material.Glass,
+		Color = Color3.fromRGB(215, 140, 255),
 		Transparency = 0.45,
+		Mesh = SPHERE,
+		Pulse = true,
 	})
-	for i = 0, 4 do
-		local a = i / 5 * math.pi * 2
-		weldPart(model, root, {
-			Name = "Tentacle",
-			Size = Vector3.new(0.2, 3.5, 0.2),
-			CFrame = CFrame.new(math.cos(a) * 0.9, -1.8, math.sin(a) * 0.9),
+	weld(root, bell)
+	local core = mk(model, {
+		Name = "Core",
+		Size = Vector3.new(1.6, 1, 1.6),
+		CFrame = CFrame.new(0, 0.7, 0),
+		Material = Enum.Material.Neon,
+		Color = Color3.fromRGB(255, 150, 230),
+		Transparency = 0.25,
+		Mesh = SPHERE,
+		Pulse = true,
+	})
+	weld(bell, core)
+	for i = 0, 9 do
+		local a = i / 10 * math.pi * 2
+		local frill = mk(model, {
+			Name = "Frill",
+			Size = Vector3.new(0.6, 0.35, 0.6),
+			CFrame = CFrame.new(math.cos(a) * 1.65, -0.25, math.sin(a) * 1.65),
 			Material = Enum.Material.Neon,
-			Color = Color3.fromRGB(255, 160, 240),
-			Transparency = 0.3,
+			Color = Color3.fromRGB(255, 120, 210),
+			Transparency = 0.35,
+			Mesh = SPHERE,
 		})
+		weld(bell, frill)
 	end
 	local light = Instance.new("PointLight")
-	light.Range = 10
-	light.Brightness = 1.2
-	light.Color = color
-	light.Parent = bell
+	light.Range = 11
+	light.Brightness = 1.3
+	light.Color = Color3.fromRGB(230, 140, 255)
+	light.Parent = core
+	-- tentacles: chains of 3 segments each
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2 + 0.3
+		local prev = bell
+		local c0 = CFrame.new(math.cos(a) * 1.2, -1.2, math.sin(a) * 1.2) * CFrame.new(0, 0, 0)
+		for s = 1, 3 do
+			local seg = mk(model, {
+				Name = "Tentacle",
+				Size = Vector3.new(0.16, 1.3, 0.16),
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(255, 170, 235),
+				Transparency = 0.3 + s * 0.12,
+				Mesh = SPHERE,
+			})
+			joint(prev, seg, c0, CFrame.new(0, 0.6, 0), { 0.28, 2.2, i * 1.1 + s * 0.7, (i % 2 == 0) and "X" or "Z" })
+			prev = seg
+			c0 = CFrame.new(0, -0.6, 0)
+		end
+	end
+	-- two frilly oral arms in the middle
+	for i = 0, 1 do
+		local arm = mk(model, {
+			Name = "OralArm",
+			Size = Vector3.new(0.5, 2.6, 0.3),
+			Material = Enum.Material.Glass,
+			Color = Color3.fromRGB(255, 190, 240),
+			Transparency = 0.3,
+			Mesh = SPHERE,
+		})
+		joint(bell, arm, CFrame.new(i * 0.4 - 0.2, -1, 0), CFrame.new(0, 1.2, 0), { 0.18, 1.5, i * 2, "Z" })
+	end
 	return model, root
 end
 
+-- Moray eel: long slithering body made of jointed segments, open jaws
 function Builders.Eel()
 	local model = Instance.new("Model")
 	model.Name = "Eel"
-	local root = makeRoot(model, Vector3.new(2.4, 2.4, 8))
-	local skin = Color3.fromRGB(60, 90, 70)
-	for i = 0, 5 do
-		local s = 2.2 - i * 0.28
-		weldPart(model, root, {
-			Name = "Segment",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(s, s, s),
-			CFrame = CFrame.new(math.sin(i * 0.9) * 0.4, 0, -2 + i * 1.5),
-			Material = Enum.Material.SmoothPlastic,
-			Color = (i % 2 == 0) and skin or Color3.fromRGB(80, 120, 85),
-		})
-	end
-	weldPart(model, root, {
-		Name = "Fin",
-		Size = Vector3.new(0.2, 0.9, 6),
-		CFrame = CFrame.new(0, 1, 1.2),
+	local root = makeRoot(model, Vector3.new(2.4, 2.4, 4))
+	local skin1 = Color3.fromRGB(70, 92, 48)
+	local skin2 = Color3.fromRGB(110, 120, 55)
+	local head = mk(model, {
+		Name = "Head",
+		Size = Vector3.new(1.5, 1.7, 2.8),
+		CFrame = CFrame.new(),
 		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(150, 200, 120),
+		Color = skin1,
+		Mesh = SPHERE,
 	})
-	eye(model, root, Vector3.new(-0.7, 0.4, -2.6), Color3.fromRGB(255, 240, 60), 0.45)
-	eye(model, root, Vector3.new(0.7, 0.4, -2.6), Color3.fromRGB(255, 240, 60), 0.45)
+	weld(root, head)
+	local jaw = mk(model, {
+		Name = "Jaw",
+		Size = Vector3.new(1.2, 0.55, 2),
+		CFrame = CFrame.new(0, -0.65, -0.55) * CFrame.Angles(0.35, 0, 0),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(160, 160, 90),
+		Mesh = SPHERE,
+	})
+	weld(head, jaw)
+	local mouth = mk(model, {
+		Name = "Mouth",
+		Size = Vector3.new(0.95, 0.45, 1.6),
+		CFrame = CFrame.new(0, -0.42, -0.75),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(90, 15, 20),
+		Mesh = SPHERE,
+	})
+	weld(head, mouth)
+	for i = 1, 4 do
+		for _, side in ipairs({ -1, 1 }) do
+			local tooth = mk(model, {
+				Name = "Tooth",
+				Size = Vector3.new(0.1, 0.32, 0.1),
+				CFrame = CFrame.new(side * (0.42 - i * 0.04), -0.5, -1.4 + i * 0.28),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(250, 250, 235),
+				Mesh = SPHERE,
+			})
+			weld(head, tooth)
+		end
+	end
+	eyePair(model, head, 0.55, 0.45, -0.75, 0.45, Color3.fromRGB(255, 230, 50), true)
+	-- body segments, each on a joint, getting thinner towards the tail
+	local prev = head
+	local prevHalf = 1.2
+	for i = 1, 8 do
+		local w = 1.5 - i * 0.12
+		local h = 1.7 - i * 0.14
+		local seg = mk(model, {
+			Name = "Segment",
+			Size = Vector3.new(w, h, 2.3),
+			Material = Enum.Material.SmoothPlastic,
+			Color = (i % 2 == 0) and skin1 or skin2,
+			Mesh = SPHERE,
+		})
+		joint(prev, seg, CFrame.new(0, 0, prevHalf), CFrame.new(0, 0, -0.95), { 0.32, 7, -i * 0.75, "Y" })
+		local fin = mk(model, {
+			Name = "Fin",
+			Size = Vector3.new(0.1, h * 0.55, 2.2),
+			CFrame = seg.CFrame * CFrame.new(0, h * 0.48, 0),
+			Material = Enum.Material.SmoothPlastic,
+			Color = Color3.fromRGB(150, 160, 80),
+			Transparency = 0.2,
+			Mesh = SPHERE,
+		})
+		weld(seg, fin)
+		-- a few glowing spots so eels show up in the dark
+		if i % 3 == 1 then
+			for _, side in ipairs({ -1, 1 }) do
+				local spot = mk(model, {
+					Name = "GlowSpot",
+					Size = Vector3.new(0.15, 0.3, 0.3),
+					CFrame = seg.CFrame * CFrame.new(side * w * 0.48, 0, 0),
+					Material = Enum.Material.Neon,
+					Color = Color3.fromRGB(120, 255, 200),
+					Mesh = SPHERE,
+				})
+				weld(seg, spot)
+			end
+		end
+		prev = seg
+		prevHalf = 0.95
+	end
 	return model, root
 end
 
@@ -2641,7 +3064,7 @@ local function stepMonster(m, dt, subs, now)
 	m.Vel = m.Vel:Lerp(targetVel, math.clamp(dt * 3, 0, 1))
 	m.Pos = clampToWater(m.Pos + m.Vel * dt)
 	local look = m.Vel.Magnitude > 0.5 and m.Vel.Unit or Vector3.new(0, 0, -1)
-	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 10 + m.Phase) * 0.18
+	local wiggle = (def.Attack == "Latch") and 0 or math.sin(now * 3 + m.Phase) * 0.06
 	if math.abs(look.Y) > 0.98 then
 		m.CF = CFrame.new(m.Pos)
 	else
@@ -2822,7 +3245,9 @@ function Monsters.Init(context)
 end
 
 return Monsters
-]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX00000008"><Properties><string name="Name">GameServer</string><ProtectedString name="Source"><![CDATA[--[[
+end)()
+
+--[[
 	GameServer  (Script)
 	LOCATION: ServerScriptService > GameServer
 
@@ -2844,11 +3269,11 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local DataStoreService = game:GetService("DataStoreService")
 local Debris = game:GetService("Debris")
 
-local Config = require(ReplicatedStorage:WaitForChild("DeepDiveConfig"))
-local WorldBuilder = require(script.Parent:WaitForChild("WorldBuilder"))
-local SubBuilder = require(script.Parent:WaitForChild("SubBuilder"))
-local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
-local Monsters = require(script.Parent:WaitForChild("Monsters"))
+local Config = DeepDiveConfig
+local WorldBuilder = WorldBuilderModule
+local SubBuilder = SubBuilderModule
+local PlayerData = PlayerDataModule
+local Monsters = MonstersModule
 
 local S = Config.SURFACE_Y
 local rng = Random.new()
@@ -2894,6 +3319,25 @@ for _, name in ipairs(REMOTE_NAMES) do
 	ev.Parent = remotesFolder
 	R[name] = ev
 end
+-- Clients ask for the config once (functions can't be sent, so strip them)
+local function plainCopy(t)
+	local out = {}
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			out[k] = plainCopy(v)
+		elseif type(v) ~= "function" then
+			out[k] = v
+		end
+	end
+	return out
+end
+local configForClients = plainCopy(Config)
+local getConfig = Instance.new("RemoteFunction")
+getConfig.Name = "GetConfig"
+getConfig.OnServerInvoke = function()
+	return configForClients
+end
+getConfig.Parent = remotesFolder
 remotesFolder.Parent = ReplicatedStorage
 
 ------------------------------------------------------------------------
@@ -3100,13 +3544,7 @@ local function applyStats(sub)
 	m:SetAttribute("HarpoonLevel", st.HarpoonLevel)
 	m:SetAttribute("HarpoonCooldown", st.HarpoonCooldown)
 
-	local lamp = m:FindFirstChild("Headlight")
-	local beam = lamp and lamp:FindFirstChild("Beam")
-	if beam then
-		beam.Range = st.LightRange
-		beam.Angle = st.LightAngle
-		beam.Brightness = st.LightBrightness
-	end
+	SubBuilder.ApplyLights(m, st.LightRange, st.LightAngle, st.LightBrightness)
 	local barrel = m:FindFirstChild("Barrel")
 	if barrel then
 		barrel.Transparency = st.HarpoonLevel > 1 and 0 or 1
@@ -3733,12 +4171,21 @@ local function lootPart(model, props)
 	p.CastShadow = false
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	local mesh = props.Mesh
+	props.Mesh = nil
 	for k, v in pairs(props) do
 		p[k] = v
+	end
+	if mesh then
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = mesh
+		m.Parent = p
 	end
 	p.Parent = model
 	return p
 end
+
+local SPHERE = Enum.MeshType.Sphere
 
 local function buildLootModel(def, pos)
 	local model = Instance.new("Model")
@@ -3747,98 +4194,171 @@ local function buildLootModel(def, pos)
 	local main
 	local look = def.Look
 	if look == "Scrap" then
+		-- rusty pipe + bent plate
 		main = lootPart(model, {
-			Size = Vector3.new(2.2, 0.7, 1.6),
-			CFrame = base * CFrame.Angles(0.2, 0, 0.3),
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(2.6, 0.7, 0.7),
+			CFrame = base * CFrame.new(0, -0.5, 0) * CFrame.Angles(0, 0.4, 0),
 			Material = Enum.Material.CorrodedMetal,
+			Color = Color3.fromRGB(150, 95, 60),
+		})
+		lootPart(model, {
+			Size = Vector3.new(1.8, 0.15, 1.4),
+			CFrame = base * CFrame.new(0.3, -0.3, 0.5) * CFrame.Angles(0.3, 1.2, 0.25),
+			Material = Enum.Material.DiamondPlate,
 			Color = def.Color,
 		})
 		lootPart(model, {
-			Size = Vector3.new(0.4, 0.4, 2.4),
-			CFrame = base * CFrame.new(0.4, 0.4, 0) * CFrame.Angles(0, 0.7, 0.4),
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.2, 0.9, 0.9),
+			CFrame = base * CFrame.new(1.3, -0.5, -0.5) * CFrame.Angles(0, 0.4, 0),
 			Material = Enum.Material.Metal,
 			Color = Color3.fromRGB(110, 110, 120),
 		})
 	elseif look == "Shell" then
+		-- scallop shell with ridges
 		main = lootPart(model, {
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.8, 1.8, 1.8),
-			CFrame = base,
-			Material = Enum.Material.Pebble,
+			Size = Vector3.new(2, 0.6, 1.8),
+			CFrame = base * CFrame.new(0, -0.6, 0) * CFrame.Angles(0.2, 0, 0),
+			Material = Enum.Material.SmoothPlastic,
 			Color = def.Color,
+			Mesh = SPHERE,
 		})
-		for i = -1, 1 do
+		for i = -2, 2 do
 			lootPart(model, {
-				Size = Vector3.new(0.2, 0.2, 2),
-				CFrame = base * CFrame.Angles(0, i * 0.5, 0) * CFrame.new(0, 0.85, 0),
+				Size = Vector3.new(0.15, 0.25, 1.7),
+				CFrame = main.CFrame * CFrame.new(i * 0.36, 0.22, 0) * CFrame.Angles(0, i * 0.18, 0),
 				Material = Enum.Material.SmoothPlastic,
-				Color = Color3.fromRGB(255, 230, 240),
+				Color = Color3.fromRGB(255, 225, 235),
+				Mesh = SPHERE,
 			})
 		end
+		lootPart(model, {
+			Size = Vector3.new(0.7, 0.35, 0.5),
+			CFrame = main.CFrame * CFrame.new(0, 0, 0.95),
+			Material = Enum.Material.SmoothPlastic,
+			Color = def.Color,
+			Mesh = SPHERE,
+		})
 	elseif look == "Chest" then
 		main = lootPart(model, {
-			Size = Vector3.new(3, 2, 2),
-			CFrame = base,
+			Size = Vector3.new(3, 1.6, 2),
+			CFrame = base * CFrame.new(0, -0.4, 0) * CFrame.Angles(0, 0, 0.12),
 			Material = Enum.Material.WoodPlanks,
-			Color = Color3.fromRGB(120, 80, 45),
+			Color = Color3.fromRGB(110, 72, 40),
 		})
-		lootPart(model, {
-			Size = Vector3.new(3.1, 0.35, 2.1),
-			CFrame = base * CFrame.new(0, 0.6, 0),
-			Material = Enum.Material.Neon,
-			Color = def.Color,
-		})
-	elseif look == "Pearl" then
 		lootPart(model, {
 			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.5, 2.6, 2.6),
-			CFrame = base * CFrame.new(0, -0.4, 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Size = Vector3.new(3, 2, 2),
+			CFrame = main.CFrame * CFrame.new(0, 0.55, -0.35) * CFrame.Angles(-0.5, 0, 0),
+			Material = Enum.Material.WoodPlanks,
+			Color = Color3.fromRGB(95, 62, 35),
+		})
+		for _, x in ipairs({ -1.1, 1.1 }) do
+			lootPart(model, {
+				Size = Vector3.new(0.2, 1.7, 2.1),
+				CFrame = main.CFrame * CFrame.new(x, 0, 0),
+				Material = Enum.Material.Metal,
+				Color = Color3.fromRGB(200, 160, 60),
+			})
+		end
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.5, 1.4),
+			CFrame = main.CFrame * CFrame.new(0, 0.85, 0.1),
+			Material = Enum.Material.Neon,
+			Color = def.Color,
+			Mesh = SPHERE,
+		})
+	elseif look == "Pearl" then
+		-- open clam with a glowing pearl inside
+		local clamCF = base * CFrame.new(0, -0.7, 0)
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.6, 2.2),
+			CFrame = clamCF,
 			Material = Enum.Material.Pebble,
 			Color = Color3.fromRGB(110, 90, 140),
+			Mesh = SPHERE,
+		})
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.6, 2.2),
+			CFrame = clamCF * CFrame.new(0, 0.6, 0.9) * CFrame.Angles(-0.9, 0, 0),
+			Material = Enum.Material.Pebble,
+			Color = Color3.fromRGB(125, 100, 155),
+			Mesh = SPHERE,
 		})
 		main = lootPart(model, {
 			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.2, 1.2, 1.2),
-			CFrame = base,
+			Size = Vector3.new(0.9, 0.9, 0.9),
+			CFrame = clamCF * CFrame.new(0, 0.45, -0.1),
 			Material = Enum.Material.Neon,
 			Color = def.Color,
 		})
 	elseif look == "Coins" then
-		for i = 0, 3 do
+		-- a spilled pile of old gold coins
+		for i = 1, 7 do
 			local c = lootPart(model, {
 				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(0.3, 1.4, 1.4),
-				CFrame = base * CFrame.new(i * 0.25 - 0.4, -0.4 + i * 0.3, i * 0.2) * CFrame.Angles(0, 0, math.rad(90)),
+				Size = Vector3.new(0.18, 0.9, 0.9),
+				CFrame = base
+					* CFrame.new(rng:NextNumber(-0.8, 0.8), -0.8 + (i % 3) * 0.15, rng:NextNumber(-0.8, 0.8))
+					* CFrame.Angles(
+						rng:NextNumber(-0.4, 0.4),
+						rng:NextNumber(0, 3),
+						math.rad(90) + rng:NextNumber(-0.4, 0.4)
+					),
 				Material = Enum.Material.Foil,
 				Color = def.Color,
 			})
 			main = main or c
 		end
+		lootPart(model, {
+			Size = Vector3.new(1.4, 0.7, 1.4),
+			CFrame = base * CFrame.new(0, -0.6, 0),
+			Material = Enum.Material.Foil,
+			Color = Color3.fromRGB(230, 180, 50),
+			Mesh = SPHERE,
+		})
 	elseif look == "Idol" then
 		main = lootPart(model, {
-			Size = Vector3.new(1.2, 2.2, 1.2),
+			Size = Vector3.new(1, 1.8, 0.8),
 			CFrame = base,
-			Material = Enum.Material.Neon,
+			Material = Enum.Material.Foil,
 			Color = def.Color,
+			Mesh = SPHERE,
 		})
 		lootPart(model, {
 			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.3, 1.3, 1.3),
-			CFrame = base * CFrame.new(0, 1.6, 0),
+			Size = Vector3.new(0.9, 0.9, 0.9),
+			CFrame = base * CFrame.new(0, 1.2, 0),
 			Material = Enum.Material.Foil,
 			Color = def.Color,
 		})
+		for _, x in ipairs({ -0.2, 0.2 }) do
+			lootPart(model, {
+				Shape = Enum.PartType.Ball,
+				Size = Vector3.new(0.2, 0.2, 0.2),
+				CFrame = base * CFrame.new(x, 1.25, -0.4),
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(80, 255, 120),
+			})
+		end
+		lootPart(model, {
+			Size = Vector3.new(1.4, 0.4, 1.2),
+			CFrame = base * CFrame.new(0, -1, 0),
+			Material = Enum.Material.Slate,
+			Color = Color3.fromRGB(80, 80, 90),
+		})
 	else -- Crate (distress signal)
 		main = lootPart(model, {
-			Size = Vector3.new(3, 3, 3),
+			Size = Vector3.new(3, 2.4, 2.4),
 			CFrame = base,
 			Material = Enum.Material.Metal,
 			Color = Color3.fromRGB(40, 90, 100),
 		})
-		for _, y in ipairs({ -1, 1 }) do
+		for _, y in ipairs({ -0.9, 0.9 }) do
 			lootPart(model, {
-				Size = Vector3.new(3.1, 0.3, 3.1),
-				CFrame = base * CFrame.new(0, y * 1.1, 0),
+				Size = Vector3.new(3.1, 0.25, 2.5),
+				CFrame = base * CFrame.new(0, y, 0),
 				Material = Enum.Material.Neon,
 				Color = def.Color,
 			})
@@ -4291,10 +4811,10 @@ RunService.Heartbeat:Connect(function(dt)
 		if not seatedIn[plr] then
 			local _, char = getHumanoid(plr)
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if hrp and hrp.Position.Y < S - 3 then
+			if hrp and hrp.Position.Y < S - 18 then
 				teleportToDock(plr)
 				if rateOk(plr, "splash", 5) then
-					notify(plr, "Splash! You need a sub to explore the deep. Board yours at your berth.", "info")
+					notify(plr, "Too deep to swim! You need a sub to explore down there.", "info")
 				end
 			end
 		end
@@ -4417,6 +4937,7 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 	else
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.IgnoreWater = true
 		local ignore = { sub.Model, lootFolder, signalsFolder, fxFolder }
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p.Character then
@@ -4953,7 +5474,15 @@ end)
 
 _ = Debris
 print("[DeepDive] Server ready! Version " .. Config.Version)
-]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX00000012"><Properties><string name="Name">StarterPlayer</string></Properties><Item class="StarterPlayerScripts" referent="RBX00000011"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000010"><Properties><string name="Name">GameClient</string><ProtectedString name="Source"><![CDATA[--[[
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX00000006"><Properties><string name="Name">StarterPlayer</string></Properties><Item class="StarterPlayerScripts" referent="RBX00000005"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000004"><Properties><string name="Name">DeepDiveClient</string><ProtectedString name="Source"><![CDATA[--[[
+	DEEP DIVE - CLIENT SCRIPT
+	=========================
+	WHERE: Explorer > StarterPlayer > StarterPlayerScripts > (+) LocalScript
+	Paste this WHOLE file into it. (The server Script from
+	DeepDive_Server.lua must be in ServerScriptService.)
+]]
+
+--[[
 	GameClient  (LocalScript)
 	LOCATION: StarterPlayer > StarterPlayerScripts > GameClient
 
@@ -4978,7 +5507,45 @@ local TextChatService = game:GetService("TextChatService")
 local Debris = game:GetService("Debris")
 
 local player = Players.LocalPlayer
-local Config = require(ReplicatedStorage:WaitForChild("DeepDiveConfig"))
+-- Settings come from the server script (one place to change them)
+local Config = ReplicatedStorage:WaitForChild("DeepDiveRemotes"):WaitForChild("GetConfig"):InvokeServer()
+function Config.GetZone(depth)
+	for i, zone in ipairs(Config.Zones) do
+		if depth < zone.Max then
+			return zone, i
+		end
+	end
+	return Config.Zones[#Config.Zones], #Config.Zones
+end
+
+function Config.FormatNumber(n)
+	n = math.floor(n + 0.5)
+	local s = tostring(math.abs(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return (n < 0 and "-" or "") .. formatted
+end
+
+function Config.FindPaint(id)
+	for _, p in ipairs(Config.Paints) do
+		if p.Id == id then
+			return p
+		end
+	end
+	return Config.Paints[1]
+end
+
+function Config.FindLightColor(id)
+	for _, p in ipairs(Config.LightColors) do
+		if p.Id == id then
+			return p
+		end
+	end
+	return Config.LightColors[1]
+end
+
 local remotesFolder = ReplicatedStorage:WaitForChild("DeepDiveRemotes")
 local R = setmetatable({}, {
 	__index = function(t, k)
@@ -6637,6 +7204,11 @@ local function onSeatChanged(seat)
 		if sub.PrimaryPart then
 			camera.CameraSubject = sub.PrimaryPart
 		end
+		-- the sub is full of water... but you're sitting, not swimming!
+		local myHum = seat.Occupant
+		if myHum then
+			myHum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+		end
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -6661,6 +7233,7 @@ local function onSeatChanged(seat)
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum then
 			camera.CameraSubject = hum
+			hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true)
 		end
 		rebuildStationButtons()
 	end
@@ -6753,6 +7326,7 @@ end)
 ------------------------------------------------------------------------
 local aimParams = RaycastParams.new()
 aimParams.FilterType = Enum.RaycastFilterType.Exclude
+aimParams.IgnoreWater = true
 
 local function nearestMonsterInView(maxRange)
 	local root = workspace:FindFirstChild("DeepDive")
@@ -6923,6 +7497,11 @@ bloom.Intensity = 0.7
 bloom.Size = 24
 bloom.Threshold = 0.95
 bloom.Parent = Lighting
+
+local sunRays = Instance.new("SunRaysEffect")
+sunRays.Intensity = 0.06
+sunRays.Spread = 0.8
+sunRays.Parent = Lighting
 
 local snowPart = Instance.new("Part")
 snowPart.Name = "MarineSnow"
@@ -7222,6 +7801,268 @@ RunService.Heartbeat:Connect(function(dt)
 		setTutorialStep(4)
 	end
 end)
+
+------------------------------------------------------------------------
+-- Ocean life (all on this client, purely visual):
+--   * fish tails swish, jellyfish pulse, tentacles sway, eels slither
+--   * sub propellers spin, beacons blink
+--   * kelp and sea fans sway in the current
+--   * schools of small harmless fish swim around you underwater
+------------------------------------------------------------------------
+local function startOceanLife()
+	local SPHERE = Enum.MeshType.Sphere
+	local jointCache = setmetatable({}, { __mode = "k" })
+	local propAngles = setmetatable({}, { __mode = "k" })
+
+	local function getAnim(model)
+		local c = jointCache[model]
+		if c then
+			return c
+		end
+		c = { Joints = {}, Meshes = {} }
+		for _, d in ipairs(model:GetDescendants()) do
+			if d:IsA("Motor6D") and d:GetAttribute("Amp") then
+				table.insert(c.Joints, {
+					Joint = d,
+					Amp = d:GetAttribute("Amp"),
+					Freq = d:GetAttribute("Freq") or 5,
+					Phase = d:GetAttribute("Phase") or 0,
+					Axis = d:GetAttribute("Axis") or "Y",
+				})
+			elseif d:IsA("SpecialMesh") and d:GetAttribute("Pulse") then
+				table.insert(c.Meshes, d)
+			end
+		end
+		jointCache[model] = c
+		return c
+	end
+
+	-- Kelp / sea fans
+	local swayParts = {}
+	task.spawn(function()
+		local world = workspace:WaitForChild("DeepDiveWorld", 60)
+		local reef = world and world:WaitForChild("Reef", 60)
+		if not reef then
+			return
+		end
+		task.wait(2)
+		for _, p in ipairs(reef:GetDescendants()) do
+			if p:IsA("BasePart") and p:GetAttribute("Sway") then
+				table.insert(swayParts, {
+					Part = p,
+					Base = p.CFrame,
+					Half = p.Size.Y / 2,
+					Phase = math.random() * 10,
+				})
+			end
+		end
+	end)
+
+	-- Fish schools
+	local schools = {}
+	local SHALLOW_COLORS = {
+		Color3.fromRGB(255, 210, 60),
+		Color3.fromRGB(80, 170, 255),
+		Color3.fromRGB(225, 232, 240),
+		Color3.fromRGB(255, 130, 80),
+		Color3.fromRGB(120, 230, 200),
+	}
+	local DEEP_COLORS = { Color3.fromRGB(150, 165, 190), Color3.fromRGB(100, 115, 145) }
+
+	local function fishPart(size, color, material)
+		local p = Instance.new("Part")
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Size = size
+		p.Color = color
+		p.Material = material or Enum.Material.SmoothPlastic
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = SPHERE
+		m.Parent = p
+		p.Parent = fxFolder
+		return p
+	end
+
+	local function newSchool(center, deep)
+		local school = {
+			Center = center,
+			Dir = Vector3.new(math.random() - 0.5, (math.random() - 0.5) * 0.2, math.random() - 0.5).Unit,
+			Speed = 3 + math.random() * 4,
+			Fish = {},
+		}
+		local color = deep and DEEP_COLORS[math.random(#DEEP_COLORS)] or SHALLOW_COLORS[math.random(#SHALLOW_COLORS)]
+		local size = 0.6 + math.random() * 0.6
+		for _ = 1, math.random(8, 14) do
+			local body = fishPart(Vector3.new(0.35, 0.6, 1.3) * size, color, deep and Enum.Material.Glass or nil)
+			local tail = fishPart(
+				Vector3.new(0.08, 0.6, 0.5) * size,
+				color,
+				deep and Enum.Material.Neon or nil -- glowing lantern-fish tails in the deep
+			)
+			table.insert(school.Fish, {
+				Body = body,
+				Tail = tail,
+				Offset = Vector3.new(math.random() * 10 - 5, math.random() * 4 - 2, math.random() * 10 - 5),
+				Phase = math.random() * 10,
+				Size = size,
+			})
+		end
+		table.insert(schools, school)
+	end
+
+	local function clearSchools()
+		for _, school in ipairs(schools) do
+			for _, f in ipairs(school.Fish) do
+				f.Body:Destroy()
+				f.Tail:Destroy()
+			end
+		end
+		table.clear(schools)
+	end
+
+	local swayAcc = 0
+	RunService.RenderStepped:Connect(function(dt)
+		local t = os.clock()
+		local camPos = camera.CFrame.Position
+		local root = workspace:FindFirstChild("DeepDive")
+
+		-- Monsters
+		local mFolder = root and root:FindFirstChild("Monsters")
+		if mFolder then
+			for _, m in ipairs(mFolder:GetChildren()) do
+				local p = m.PrimaryPart
+				if p and (p.Position - camPos).Magnitude < 220 then
+					local anim = getAnim(m)
+					local boost = m:GetAttribute("LatchOwner") and 1.6 or 1
+					for _, j in ipairs(anim.Joints) do
+						local a = math.sin(t * j.Freq * boost + j.Phase) * j.Amp
+						if j.Axis == "X" then
+							j.Joint.Transform = CFrame.Angles(a, 0, 0)
+						elseif j.Axis == "Z" then
+							j.Joint.Transform = CFrame.Angles(0, 0, a)
+						else
+							j.Joint.Transform = CFrame.Angles(0, a, 0)
+						end
+					end
+					local pulse = math.sin(t * 3)
+					for _, mesh in ipairs(anim.Meshes) do
+						mesh.Scale = Vector3.new(1 + pulse * 0.08, 1 - pulse * 0.12, 1 + pulse * 0.08)
+					end
+				end
+			end
+		end
+
+		-- Subs: spin propellers, blink beacons
+		local sFolder = root and root:FindFirstChild("Subs")
+		if sFolder then
+			local blink = (t % 1.6) < 0.15
+			for _, sub in ipairs(sFolder:GetChildren()) do
+				local r = sub.PrimaryPart
+				if r then
+					local motor = r:FindFirstChild("PropMotor")
+					if motor then
+						local spd = r.AssemblyLinearVelocity.Magnitude
+						local angle = (propAngles[sub] or 0) + dt * (1.5 + spd * 0.9)
+						propAngles[sub] = angle
+						motor.Transform = CFrame.Angles(0, 0, angle)
+					end
+					local beacon = sub:FindFirstChild("Beacon")
+					if beacon then
+						beacon.Transparency = blink and 0 or 0.7
+					end
+				end
+			end
+		end
+
+		-- Kelp sway (15 times a second is plenty)
+		swayAcc += dt
+		if swayAcc > 1 / 15 then
+			swayAcc = 0
+			for _, s in ipairs(swayParts) do
+				if (s.Base.Position - camPos).Magnitude < 160 then
+					local ax = math.sin(t * 0.8 + s.Phase) * 0.09
+					local az = math.cos(t * 0.6 + s.Phase * 1.3) * 0.09
+					s.Part.CFrame = s.Base
+						* CFrame.new(0, -s.Half, 0)
+						* CFrame.Angles(ax, 0, az)
+						* CFrame.new(0, s.Half, 0)
+				end
+			end
+		end
+
+		-- Fish schools
+		local depth = S - camPos.Y
+		if depth < 6 then
+			if #schools > 0 then
+				clearSchools()
+			end
+			return
+		end
+		local deep = depth > 200
+		while #schools < 5 do
+			local dir = Vector3.new(math.random() - 0.5, 0, math.random() - 0.5)
+			dir = dir.Magnitude > 0 and dir.Unit or Vector3.new(1, 0, 0)
+			local c = camPos + dir * (25 + math.random() * 40) + Vector3.new(0, math.random() * 16 - 8, 0)
+			c = Vector3.new(c.X, math.min(c.Y, S - 5), c.Z)
+			newSchool(c, deep)
+		end
+		local parts, cframes = {}, {}
+		for i = #schools, 1, -1 do
+			local school = schools[i]
+			-- wander, stay below the surface, scatter if the sub is close
+			local turn = Vector3.new(
+				math.noise(t * 0.2, i) * 0.6,
+				math.noise(t * 0.15, i, 3) * 0.15,
+				math.noise(i, t * 0.2) * 0.6
+			)
+			school.Dir = (school.Dir + turn * dt).Unit
+			if school.Center.Y > S - 5 then
+				school.Dir = Vector3.new(school.Dir.X, -math.abs(school.Dir.Y) - 0.2, school.Dir.Z).Unit
+			end
+			local speed = school.Speed
+			if currentSub and currentSub.PrimaryPart then
+				local away = school.Center - currentSub.PrimaryPart.Position
+				if away.Magnitude < 14 and away.Magnitude > 0.1 then
+					school.Dir = (school.Dir + away.Unit * dt * 4).Unit
+					speed *= 2.5
+				end
+			end
+			school.Center += school.Dir * speed * dt
+			if (school.Center - camPos).Magnitude > 120 then
+				for _, f in ipairs(school.Fish) do
+					f.Body:Destroy()
+					f.Tail:Destroy()
+				end
+				table.remove(schools, i)
+			else
+				local look = school.Dir
+				for _, f in ipairs(school.Fish) do
+					local wob = Vector3.new(
+						math.sin(t + f.Phase) * 1.2,
+						math.sin(t * 1.3 + f.Phase) * 0.5,
+						math.cos(t * 0.9 + f.Phase) * 1.2
+					)
+					local pos = school.Center + f.Offset + wob
+					local cf = CFrame.lookAt(pos, pos + look)
+					table.insert(parts, f.Body)
+					table.insert(cframes, cf)
+					table.insert(parts, f.Tail)
+					table.insert(
+						cframes,
+						cf * CFrame.new(0, 0, 0.75 * f.Size) * CFrame.Angles(0, math.sin(t * 14 + f.Phase) * 0.6, 0)
+					)
+				end
+			end
+		end
+		if #parts > 0 then
+			workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged)
+		end
+	end)
+end
+startOceanLife()
 
 ------------------------------------------------------------------------
 -- VIP chat tag

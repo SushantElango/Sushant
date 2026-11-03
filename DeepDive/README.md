@@ -9,32 +9,21 @@ built by the scripts**, so you don't need to make any models by hand.
 
 ---
 
-## Option A: open the ready-made place (easiest)
+## Setup: just 2 scripts
 
-1. Download `DeepDive.rbxlx` from this folder.
-2. In Roblox Studio: **File > Open from File** and pick `DeepDive.rbxlx`.
-3. Do the **"Turn on saving"** step below, then press **Play**.
+1. In Roblox Studio, create a new place from the **Baseplate** template.
+2. In the **Explorer**, hover **ServerScriptService**, click **+**, choose
+   **Script**, delete the `print("Hello world!")` line, and paste the whole
+   of **`dist/DeepDive_Server.lua`**.
+3. Hover **StarterPlayer > StarterPlayerScripts**, click **+**, choose
+   **LocalScript**, delete what's inside, and paste the whole of
+   **`dist/DeepDive_Client.lua`**.
+4. Press **Play**.
 
-## Option B: paste the scripts yourself
+Or skip the pasting: open `DeepDive.rbxlx` with **File > Open from File**.
 
-1. In Roblox Studio, create a new place from the **Baseplate** template. The
-   script removes the baseplate automatically.
-2. In the **Explorer**, create these 7 scripts **with exactly these names**.
-   For each one: right-click the parent, choose **Insert Object**, pick the
-   type, rename it, then paste in the file's whole contents.
-
-| # | Parent in Explorer                           | Type         | Name             | Paste this file                                |
-|---|----------------------------------------------|--------------|------------------|------------------------------------------------|
-| 1 | ReplicatedStorage                            | ModuleScript | `DeepDiveConfig` | `src/ReplicatedStorage/DeepDiveConfig.lua`     |
-| 2 | ServerScriptService                          | ModuleScript | `WorldBuilder`   | `src/ServerScriptService/WorldBuilder.lua`     |
-| 3 | ServerScriptService                          | ModuleScript | `SubBuilder`     | `src/ServerScriptService/SubBuilder.lua`       |
-| 4 | ServerScriptService                          | ModuleScript | `PlayerData`     | `src/ServerScriptService/PlayerData.lua`       |
-| 5 | ServerScriptService                          | ModuleScript | `Monsters`       | `src/ServerScriptService/Monsters.lua`         |
-| 6 | ServerScriptService                          | **Script**   | `GameServer`     | `src/ServerScriptService/GameServer.lua`       |
-| 7 | StarterPlayer > StarterPlayerScripts         | **LocalScript** | `GameClient`  | `src/StarterPlayerScripts/GameClient.lua`      |
-
-ModuleScripts start with `return {}` already in them. Delete that first, then
-paste.
+The two `dist/` files are generated from the smaller modules in `src/` by
+`python3 tools/build_place.py`. Edit the modules, then rebuild.
 
 ## Turn on saving (both options)
 
@@ -113,7 +102,7 @@ The core loop:
 
 ## Where to change things
 
-Everything you'd want to balance is in **`DeepDiveConfig`**: prices, hull HP,
+Everything you'd want to balance is in the **CONFIG** section at the top of the server script (`src/ReplicatedStorage/DeepDiveConfig.lua`): prices, hull HP,
 dive depths, engine speeds, cargo slots, monster health and damage, loot
 values, spawn counts, the daily chest, lore text, sounds and Robux IDs. Change
 a number there and it updates everywhere.

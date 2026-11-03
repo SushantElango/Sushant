@@ -70,6 +70,25 @@ for _, name in ipairs(REMOTE_NAMES) do
 	ev.Parent = remotesFolder
 	R[name] = ev
 end
+-- Clients ask for the config once (functions can't be sent, so strip them)
+local function plainCopy(t)
+	local out = {}
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			out[k] = plainCopy(v)
+		elseif type(v) ~= "function" then
+			out[k] = v
+		end
+	end
+	return out
+end
+local configForClients = plainCopy(Config)
+local getConfig = Instance.new("RemoteFunction")
+getConfig.Name = "GetConfig"
+getConfig.OnServerInvoke = function()
+	return configForClients
+end
+getConfig.Parent = remotesFolder
 remotesFolder.Parent = ReplicatedStorage
 
 ------------------------------------------------------------------------
@@ -276,13 +295,7 @@ local function applyStats(sub)
 	m:SetAttribute("HarpoonLevel", st.HarpoonLevel)
 	m:SetAttribute("HarpoonCooldown", st.HarpoonCooldown)
 
-	local lamp = m:FindFirstChild("Headlight")
-	local beam = lamp and lamp:FindFirstChild("Beam")
-	if beam then
-		beam.Range = st.LightRange
-		beam.Angle = st.LightAngle
-		beam.Brightness = st.LightBrightness
-	end
+	SubBuilder.ApplyLights(m, st.LightRange, st.LightAngle, st.LightBrightness)
 	local barrel = m:FindFirstChild("Barrel")
 	if barrel then
 		barrel.Transparency = st.HarpoonLevel > 1 and 0 or 1
@@ -909,12 +922,21 @@ local function lootPart(model, props)
 	p.CastShadow = false
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	local mesh = props.Mesh
+	props.Mesh = nil
 	for k, v in pairs(props) do
 		p[k] = v
+	end
+	if mesh then
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = mesh
+		m.Parent = p
 	end
 	p.Parent = model
 	return p
 end
+
+local SPHERE = Enum.MeshType.Sphere
 
 local function buildLootModel(def, pos)
 	local model = Instance.new("Model")
@@ -923,98 +945,171 @@ local function buildLootModel(def, pos)
 	local main
 	local look = def.Look
 	if look == "Scrap" then
+		-- rusty pipe + bent plate
 		main = lootPart(model, {
-			Size = Vector3.new(2.2, 0.7, 1.6),
-			CFrame = base * CFrame.Angles(0.2, 0, 0.3),
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(2.6, 0.7, 0.7),
+			CFrame = base * CFrame.new(0, -0.5, 0) * CFrame.Angles(0, 0.4, 0),
 			Material = Enum.Material.CorrodedMetal,
+			Color = Color3.fromRGB(150, 95, 60),
+		})
+		lootPart(model, {
+			Size = Vector3.new(1.8, 0.15, 1.4),
+			CFrame = base * CFrame.new(0.3, -0.3, 0.5) * CFrame.Angles(0.3, 1.2, 0.25),
+			Material = Enum.Material.DiamondPlate,
 			Color = def.Color,
 		})
 		lootPart(model, {
-			Size = Vector3.new(0.4, 0.4, 2.4),
-			CFrame = base * CFrame.new(0.4, 0.4, 0) * CFrame.Angles(0, 0.7, 0.4),
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.2, 0.9, 0.9),
+			CFrame = base * CFrame.new(1.3, -0.5, -0.5) * CFrame.Angles(0, 0.4, 0),
 			Material = Enum.Material.Metal,
 			Color = Color3.fromRGB(110, 110, 120),
 		})
 	elseif look == "Shell" then
+		-- scallop shell with ridges
 		main = lootPart(model, {
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.8, 1.8, 1.8),
-			CFrame = base,
-			Material = Enum.Material.Pebble,
+			Size = Vector3.new(2, 0.6, 1.8),
+			CFrame = base * CFrame.new(0, -0.6, 0) * CFrame.Angles(0.2, 0, 0),
+			Material = Enum.Material.SmoothPlastic,
 			Color = def.Color,
+			Mesh = SPHERE,
 		})
-		for i = -1, 1 do
+		for i = -2, 2 do
 			lootPart(model, {
-				Size = Vector3.new(0.2, 0.2, 2),
-				CFrame = base * CFrame.Angles(0, i * 0.5, 0) * CFrame.new(0, 0.85, 0),
+				Size = Vector3.new(0.15, 0.25, 1.7),
+				CFrame = main.CFrame * CFrame.new(i * 0.36, 0.22, 0) * CFrame.Angles(0, i * 0.18, 0),
 				Material = Enum.Material.SmoothPlastic,
-				Color = Color3.fromRGB(255, 230, 240),
+				Color = Color3.fromRGB(255, 225, 235),
+				Mesh = SPHERE,
 			})
 		end
+		lootPart(model, {
+			Size = Vector3.new(0.7, 0.35, 0.5),
+			CFrame = main.CFrame * CFrame.new(0, 0, 0.95),
+			Material = Enum.Material.SmoothPlastic,
+			Color = def.Color,
+			Mesh = SPHERE,
+		})
 	elseif look == "Chest" then
 		main = lootPart(model, {
-			Size = Vector3.new(3, 2, 2),
-			CFrame = base,
+			Size = Vector3.new(3, 1.6, 2),
+			CFrame = base * CFrame.new(0, -0.4, 0) * CFrame.Angles(0, 0, 0.12),
 			Material = Enum.Material.WoodPlanks,
-			Color = Color3.fromRGB(120, 80, 45),
+			Color = Color3.fromRGB(110, 72, 40),
 		})
-		lootPart(model, {
-			Size = Vector3.new(3.1, 0.35, 2.1),
-			CFrame = base * CFrame.new(0, 0.6, 0),
-			Material = Enum.Material.Neon,
-			Color = def.Color,
-		})
-	elseif look == "Pearl" then
 		lootPart(model, {
 			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.5, 2.6, 2.6),
-			CFrame = base * CFrame.new(0, -0.4, 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Size = Vector3.new(3, 2, 2),
+			CFrame = main.CFrame * CFrame.new(0, 0.55, -0.35) * CFrame.Angles(-0.5, 0, 0),
+			Material = Enum.Material.WoodPlanks,
+			Color = Color3.fromRGB(95, 62, 35),
+		})
+		for _, x in ipairs({ -1.1, 1.1 }) do
+			lootPart(model, {
+				Size = Vector3.new(0.2, 1.7, 2.1),
+				CFrame = main.CFrame * CFrame.new(x, 0, 0),
+				Material = Enum.Material.Metal,
+				Color = Color3.fromRGB(200, 160, 60),
+			})
+		end
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.5, 1.4),
+			CFrame = main.CFrame * CFrame.new(0, 0.85, 0.1),
+			Material = Enum.Material.Neon,
+			Color = def.Color,
+			Mesh = SPHERE,
+		})
+	elseif look == "Pearl" then
+		-- open clam with a glowing pearl inside
+		local clamCF = base * CFrame.new(0, -0.7, 0)
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.6, 2.2),
+			CFrame = clamCF,
 			Material = Enum.Material.Pebble,
 			Color = Color3.fromRGB(110, 90, 140),
+			Mesh = SPHERE,
+		})
+		lootPart(model, {
+			Size = Vector3.new(2.6, 0.6, 2.2),
+			CFrame = clamCF * CFrame.new(0, 0.6, 0.9) * CFrame.Angles(-0.9, 0, 0),
+			Material = Enum.Material.Pebble,
+			Color = Color3.fromRGB(125, 100, 155),
+			Mesh = SPHERE,
 		})
 		main = lootPart(model, {
 			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.2, 1.2, 1.2),
-			CFrame = base,
+			Size = Vector3.new(0.9, 0.9, 0.9),
+			CFrame = clamCF * CFrame.new(0, 0.45, -0.1),
 			Material = Enum.Material.Neon,
 			Color = def.Color,
 		})
 	elseif look == "Coins" then
-		for i = 0, 3 do
+		-- a spilled pile of old gold coins
+		for i = 1, 7 do
 			local c = lootPart(model, {
 				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(0.3, 1.4, 1.4),
-				CFrame = base * CFrame.new(i * 0.25 - 0.4, -0.4 + i * 0.3, i * 0.2) * CFrame.Angles(0, 0, math.rad(90)),
+				Size = Vector3.new(0.18, 0.9, 0.9),
+				CFrame = base
+					* CFrame.new(rng:NextNumber(-0.8, 0.8), -0.8 + (i % 3) * 0.15, rng:NextNumber(-0.8, 0.8))
+					* CFrame.Angles(
+						rng:NextNumber(-0.4, 0.4),
+						rng:NextNumber(0, 3),
+						math.rad(90) + rng:NextNumber(-0.4, 0.4)
+					),
 				Material = Enum.Material.Foil,
 				Color = def.Color,
 			})
 			main = main or c
 		end
+		lootPart(model, {
+			Size = Vector3.new(1.4, 0.7, 1.4),
+			CFrame = base * CFrame.new(0, -0.6, 0),
+			Material = Enum.Material.Foil,
+			Color = Color3.fromRGB(230, 180, 50),
+			Mesh = SPHERE,
+		})
 	elseif look == "Idol" then
 		main = lootPart(model, {
-			Size = Vector3.new(1.2, 2.2, 1.2),
+			Size = Vector3.new(1, 1.8, 0.8),
 			CFrame = base,
-			Material = Enum.Material.Neon,
+			Material = Enum.Material.Foil,
 			Color = def.Color,
+			Mesh = SPHERE,
 		})
 		lootPart(model, {
 			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(1.3, 1.3, 1.3),
-			CFrame = base * CFrame.new(0, 1.6, 0),
+			Size = Vector3.new(0.9, 0.9, 0.9),
+			CFrame = base * CFrame.new(0, 1.2, 0),
 			Material = Enum.Material.Foil,
 			Color = def.Color,
 		})
+		for _, x in ipairs({ -0.2, 0.2 }) do
+			lootPart(model, {
+				Shape = Enum.PartType.Ball,
+				Size = Vector3.new(0.2, 0.2, 0.2),
+				CFrame = base * CFrame.new(x, 1.25, -0.4),
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(80, 255, 120),
+			})
+		end
+		lootPart(model, {
+			Size = Vector3.new(1.4, 0.4, 1.2),
+			CFrame = base * CFrame.new(0, -1, 0),
+			Material = Enum.Material.Slate,
+			Color = Color3.fromRGB(80, 80, 90),
+		})
 	else -- Crate (distress signal)
 		main = lootPart(model, {
-			Size = Vector3.new(3, 3, 3),
+			Size = Vector3.new(3, 2.4, 2.4),
 			CFrame = base,
 			Material = Enum.Material.Metal,
 			Color = Color3.fromRGB(40, 90, 100),
 		})
-		for _, y in ipairs({ -1, 1 }) do
+		for _, y in ipairs({ -0.9, 0.9 }) do
 			lootPart(model, {
-				Size = Vector3.new(3.1, 0.3, 3.1),
-				CFrame = base * CFrame.new(0, y * 1.1, 0),
+				Size = Vector3.new(3.1, 0.25, 2.5),
+				CFrame = base * CFrame.new(0, y, 0),
 				Material = Enum.Material.Neon,
 				Color = def.Color,
 			})
@@ -1467,10 +1562,10 @@ RunService.Heartbeat:Connect(function(dt)
 		if not seatedIn[plr] then
 			local _, char = getHumanoid(plr)
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if hrp and hrp.Position.Y < S - 3 then
+			if hrp and hrp.Position.Y < S - 18 then
 				teleportToDock(plr)
 				if rateOk(plr, "splash", 5) then
-					notify(plr, "Splash! You need a sub to explore the deep. Board yours at your berth.", "info")
+					notify(plr, "Too deep to swim! You need a sub to explore down there.", "info")
 				end
 			end
 		end
@@ -1593,6 +1688,7 @@ R.Fire.OnServerEvent:Connect(function(plr, targetPos)
 	else
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.IgnoreWater = true
 		local ignore = { sub.Model, lootFolder, signalsFolder, fxFolder }
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p.Character then

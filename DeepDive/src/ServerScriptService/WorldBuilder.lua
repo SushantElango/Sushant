@@ -41,9 +41,18 @@ local function part(props)
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
 	for k, v in pairs(props) do
-		if k ~= "Parent" then
+		if k ~= "Parent" and k ~= "Mesh" and k ~= "Sway" then
 			p[k] = v
 		end
+	end
+	if props.Mesh then
+		-- SpecialMesh sphere = smooth rounded shape instead of a box
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = props.Mesh
+		m.Parent = p
+	end
+	if props.Sway then
+		p:SetAttribute("Sway", props.Sway) -- clients gently sway these (kelp, sea fans)
 	end
 	p.Parent = props.Parent
 	return p
@@ -132,6 +141,7 @@ end
 local terrainParams = RaycastParams.new()
 terrainParams.FilterType = Enum.RaycastFilterType.Include
 terrainParams.FilterDescendantsInstances = { workspace.Terrain }
+terrainParams.IgnoreWater = true
 function WorldBuilder.RealFloorY(x, z)
 	local guess = WorldBuilder.FloorY(x, z)
 	local result = workspace:Raycast(Vector3.new(x, guess + 40, z), Vector3.new(0, -90, 0), terrainParams)
@@ -163,6 +173,14 @@ end
 local function buildTerrain()
 	local terrain = workspace.Terrain
 	terrain:Clear()
+	-- realistic ocean water (waves, reflections, underwater blur)
+	pcall(function()
+		terrain.WaterColor = Color3.fromRGB(22, 92, 120)
+		terrain.WaterTransparency = 0.55
+		terrain.WaterReflectance = 0.6
+		terrain.WaterWaveSize = 0.25
+		terrain.WaterWaveSpeed = 10
+	end)
 	-- Smooth terrain: write voxels with partial "occupancy" so the floor is
 	-- a smooth surface instead of big stepped blocks.
 	local RES = 4
@@ -223,6 +241,11 @@ local function buildTerrain()
 								mat = d < 200 and Enum.Material.Sandstone or Enum.Material.Basalt -- deeper underground
 							end
 						end
+						-- below sea level, empty space becomes real ocean water
+						if yBottom + RES <= S and occ < 0.5 then
+							mat = Enum.Material.Water
+							occ = 1
+						end
 						mRow[iz] = mat
 						oRow[iz] = occ
 					end
@@ -230,6 +253,14 @@ local function buildTerrain()
 			end
 			local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x0 + CHUNK, y1, z0 + CHUNK))
 			terrain:WriteVoxels(region, RES, materials, occupancy)
+			-- fill the rest of this column with water up to the surface
+			if y1 < S then
+				terrain:FillBlock(
+					CFrame.new(x0 + CHUNK / 2, (y1 + S) / 2, z0 + CHUNK / 2),
+					Vector3.new(CHUNK, S - y1, CHUNK),
+					Enum.Material.Water
+				)
+			end
 			count += 1
 			if count % 8 == 0 then
 				task.wait()
@@ -694,11 +725,24 @@ local function buildReef(root)
 			local s = rng:NextNumber(3, 6)
 			deco({
 				Name = "BrainCoral",
-				Shape = Enum.PartType.Ball,
-				Size = Vector3.new(s, s, s),
-				CFrame = CFrame.new(x, fy + s * 0.25, z),
+				Size = Vector3.new(s, s * 0.65, s * rng:NextNumber(0.8, 1.1)),
+				CFrame = CFrame.new(x, fy + s * 0.15, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
 				Material = Enum.Material.Pebble,
 				Color = color,
+				Mesh = Enum.MeshType.Sphere,
+				Parent = reef,
+			})
+			-- a sea fan next to it
+			local fh = rng:NextNumber(3, 6)
+			deco({
+				Name = "SeaFan",
+				Size = Vector3.new(0.15, fh, fh * 0.9),
+				CFrame = CFrame.new(x + s * 0.6, fy + fh * 0.45, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0),
+				Material = Enum.Material.Fabric,
+				Color = CORAL_COLORS[rng:NextInteger(1, #CORAL_COLORS)],
+				Transparency = 0.1,
+				Mesh = Enum.MeshType.Sphere,
+				Sway = fh,
 				Parent = reef,
 			})
 		else
@@ -724,16 +768,22 @@ local function buildReef(root)
 		local x = rng:NextNumber(-420, 420)
 		local z = rng:NextNumber(-60, 280)
 		local fy = WorldBuilder.RealFloorY(x, z)
-		local h = rng:NextNumber(14, 32)
-		deco({
-			Name = "Kelp",
-			Size = Vector3.new(0.5, h, 1.6),
-			CFrame = CFrame.new(x, fy + h / 2, z) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), rng:NextNumber(0, 3), 0),
-			Material = Enum.Material.Grass,
-			Color = Color3.fromRGB(60, rng:NextInteger(120, 160), 60),
-			Transparency = 0.1,
-			Parent = reef,
-		})
+		-- each kelp plant is a few long leafy blades that sway in the current
+		for blade = 1, 3 do
+			local h = rng:NextNumber(12, 30)
+			deco({
+				Name = "Kelp",
+				Size = Vector3.new(0.3, h, 1.8),
+				CFrame = CFrame.new(x + rng:NextNumber(-1.2, 1.2), fy + h / 2 - 0.5, z + rng:NextNumber(-1.2, 1.2))
+					* CFrame.Angles(rng:NextNumber(-0.1, 0.1), blade * 1.1, rng:NextNumber(-0.1, 0.1)),
+				Material = Enum.Material.SmoothPlastic,
+				Color = Color3.fromRGB(rng:NextInteger(50, 90), rng:NextInteger(115, 150), 45),
+				Transparency = 0.05,
+				Mesh = Enum.MeshType.Sphere,
+				Sway = h,
+				Parent = reef,
+			})
+		end
 	end
 
 	-- Shipwreck on the reef
@@ -936,16 +986,7 @@ end
 -- Water + lighting
 ------------------------------------------------------------------------
 local function buildWater(root)
-	local water = deco({
-		Name = "WaterSurface",
-		Size = Vector3.new(2048, 1, 2048),
-		CFrame = CFrame.new(0, S, 340),
-		Material = Enum.Material.SmoothPlastic,
-		Color = Color3.fromRGB(30, 130, 180),
-		Transparency = 0.3,
-		Parent = root,
-	})
-	_ = water
+	-- (the water itself is real Terrain water, made in buildTerrain)
 
 	-- Invisible safety walls around the ocean (terrain walls are the real ones)
 	local walls = {

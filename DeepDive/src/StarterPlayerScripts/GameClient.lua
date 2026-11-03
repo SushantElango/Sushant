@@ -1682,6 +1682,11 @@ local function onSeatChanged(seat)
 		if sub.PrimaryPart then
 			camera.CameraSubject = sub.PrimaryPart
 		end
+		-- the sub is full of water... but you're sitting, not swimming!
+		local myHum = seat.Occupant
+		if myHum then
+			myHum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+		end
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -1706,6 +1711,7 @@ local function onSeatChanged(seat)
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum then
 			camera.CameraSubject = hum
+			hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true)
 		end
 		rebuildStationButtons()
 	end
@@ -1798,6 +1804,7 @@ end)
 ------------------------------------------------------------------------
 local aimParams = RaycastParams.new()
 aimParams.FilterType = Enum.RaycastFilterType.Exclude
+aimParams.IgnoreWater = true
 
 local function nearestMonsterInView(maxRange)
 	local root = workspace:FindFirstChild("DeepDive")
@@ -1968,6 +1975,11 @@ bloom.Intensity = 0.7
 bloom.Size = 24
 bloom.Threshold = 0.95
 bloom.Parent = Lighting
+
+local sunRays = Instance.new("SunRaysEffect")
+sunRays.Intensity = 0.06
+sunRays.Spread = 0.8
+sunRays.Parent = Lighting
 
 local snowPart = Instance.new("Part")
 snowPart.Name = "MarineSnow"
@@ -2267,6 +2279,268 @@ RunService.Heartbeat:Connect(function(dt)
 		setTutorialStep(4)
 	end
 end)
+
+------------------------------------------------------------------------
+-- Ocean life (all on this client, purely visual):
+--   * fish tails swish, jellyfish pulse, tentacles sway, eels slither
+--   * sub propellers spin, beacons blink
+--   * kelp and sea fans sway in the current
+--   * schools of small harmless fish swim around you underwater
+------------------------------------------------------------------------
+local function startOceanLife()
+	local SPHERE = Enum.MeshType.Sphere
+	local jointCache = setmetatable({}, { __mode = "k" })
+	local propAngles = setmetatable({}, { __mode = "k" })
+
+	local function getAnim(model)
+		local c = jointCache[model]
+		if c then
+			return c
+		end
+		c = { Joints = {}, Meshes = {} }
+		for _, d in ipairs(model:GetDescendants()) do
+			if d:IsA("Motor6D") and d:GetAttribute("Amp") then
+				table.insert(c.Joints, {
+					Joint = d,
+					Amp = d:GetAttribute("Amp"),
+					Freq = d:GetAttribute("Freq") or 5,
+					Phase = d:GetAttribute("Phase") or 0,
+					Axis = d:GetAttribute("Axis") or "Y",
+				})
+			elseif d:IsA("SpecialMesh") and d:GetAttribute("Pulse") then
+				table.insert(c.Meshes, d)
+			end
+		end
+		jointCache[model] = c
+		return c
+	end
+
+	-- Kelp / sea fans
+	local swayParts = {}
+	task.spawn(function()
+		local world = workspace:WaitForChild("DeepDiveWorld", 60)
+		local reef = world and world:WaitForChild("Reef", 60)
+		if not reef then
+			return
+		end
+		task.wait(2)
+		for _, p in ipairs(reef:GetDescendants()) do
+			if p:IsA("BasePart") and p:GetAttribute("Sway") then
+				table.insert(swayParts, {
+					Part = p,
+					Base = p.CFrame,
+					Half = p.Size.Y / 2,
+					Phase = math.random() * 10,
+				})
+			end
+		end
+	end)
+
+	-- Fish schools
+	local schools = {}
+	local SHALLOW_COLORS = {
+		Color3.fromRGB(255, 210, 60),
+		Color3.fromRGB(80, 170, 255),
+		Color3.fromRGB(225, 232, 240),
+		Color3.fromRGB(255, 130, 80),
+		Color3.fromRGB(120, 230, 200),
+	}
+	local DEEP_COLORS = { Color3.fromRGB(150, 165, 190), Color3.fromRGB(100, 115, 145) }
+
+	local function fishPart(size, color, material)
+		local p = Instance.new("Part")
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Size = size
+		p.Color = color
+		p.Material = material or Enum.Material.SmoothPlastic
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = SPHERE
+		m.Parent = p
+		p.Parent = fxFolder
+		return p
+	end
+
+	local function newSchool(center, deep)
+		local school = {
+			Center = center,
+			Dir = Vector3.new(math.random() - 0.5, (math.random() - 0.5) * 0.2, math.random() - 0.5).Unit,
+			Speed = 3 + math.random() * 4,
+			Fish = {},
+		}
+		local color = deep and DEEP_COLORS[math.random(#DEEP_COLORS)] or SHALLOW_COLORS[math.random(#SHALLOW_COLORS)]
+		local size = 0.6 + math.random() * 0.6
+		for _ = 1, math.random(8, 14) do
+			local body = fishPart(Vector3.new(0.35, 0.6, 1.3) * size, color, deep and Enum.Material.Glass or nil)
+			local tail = fishPart(
+				Vector3.new(0.08, 0.6, 0.5) * size,
+				color,
+				deep and Enum.Material.Neon or nil -- glowing lantern-fish tails in the deep
+			)
+			table.insert(school.Fish, {
+				Body = body,
+				Tail = tail,
+				Offset = Vector3.new(math.random() * 10 - 5, math.random() * 4 - 2, math.random() * 10 - 5),
+				Phase = math.random() * 10,
+				Size = size,
+			})
+		end
+		table.insert(schools, school)
+	end
+
+	local function clearSchools()
+		for _, school in ipairs(schools) do
+			for _, f in ipairs(school.Fish) do
+				f.Body:Destroy()
+				f.Tail:Destroy()
+			end
+		end
+		table.clear(schools)
+	end
+
+	local swayAcc = 0
+	RunService.RenderStepped:Connect(function(dt)
+		local t = os.clock()
+		local camPos = camera.CFrame.Position
+		local root = workspace:FindFirstChild("DeepDive")
+
+		-- Monsters
+		local mFolder = root and root:FindFirstChild("Monsters")
+		if mFolder then
+			for _, m in ipairs(mFolder:GetChildren()) do
+				local p = m.PrimaryPart
+				if p and (p.Position - camPos).Magnitude < 220 then
+					local anim = getAnim(m)
+					local boost = m:GetAttribute("LatchOwner") and 1.6 or 1
+					for _, j in ipairs(anim.Joints) do
+						local a = math.sin(t * j.Freq * boost + j.Phase) * j.Amp
+						if j.Axis == "X" then
+							j.Joint.Transform = CFrame.Angles(a, 0, 0)
+						elseif j.Axis == "Z" then
+							j.Joint.Transform = CFrame.Angles(0, 0, a)
+						else
+							j.Joint.Transform = CFrame.Angles(0, a, 0)
+						end
+					end
+					local pulse = math.sin(t * 3)
+					for _, mesh in ipairs(anim.Meshes) do
+						mesh.Scale = Vector3.new(1 + pulse * 0.08, 1 - pulse * 0.12, 1 + pulse * 0.08)
+					end
+				end
+			end
+		end
+
+		-- Subs: spin propellers, blink beacons
+		local sFolder = root and root:FindFirstChild("Subs")
+		if sFolder then
+			local blink = (t % 1.6) < 0.15
+			for _, sub in ipairs(sFolder:GetChildren()) do
+				local r = sub.PrimaryPart
+				if r then
+					local motor = r:FindFirstChild("PropMotor")
+					if motor then
+						local spd = r.AssemblyLinearVelocity.Magnitude
+						local angle = (propAngles[sub] or 0) + dt * (1.5 + spd * 0.9)
+						propAngles[sub] = angle
+						motor.Transform = CFrame.Angles(0, 0, angle)
+					end
+					local beacon = sub:FindFirstChild("Beacon")
+					if beacon then
+						beacon.Transparency = blink and 0 or 0.7
+					end
+				end
+			end
+		end
+
+		-- Kelp sway (15 times a second is plenty)
+		swayAcc += dt
+		if swayAcc > 1 / 15 then
+			swayAcc = 0
+			for _, s in ipairs(swayParts) do
+				if (s.Base.Position - camPos).Magnitude < 160 then
+					local ax = math.sin(t * 0.8 + s.Phase) * 0.09
+					local az = math.cos(t * 0.6 + s.Phase * 1.3) * 0.09
+					s.Part.CFrame = s.Base
+						* CFrame.new(0, -s.Half, 0)
+						* CFrame.Angles(ax, 0, az)
+						* CFrame.new(0, s.Half, 0)
+				end
+			end
+		end
+
+		-- Fish schools
+		local depth = S - camPos.Y
+		if depth < 6 then
+			if #schools > 0 then
+				clearSchools()
+			end
+			return
+		end
+		local deep = depth > 200
+		while #schools < 5 do
+			local dir = Vector3.new(math.random() - 0.5, 0, math.random() - 0.5)
+			dir = dir.Magnitude > 0 and dir.Unit or Vector3.new(1, 0, 0)
+			local c = camPos + dir * (25 + math.random() * 40) + Vector3.new(0, math.random() * 16 - 8, 0)
+			c = Vector3.new(c.X, math.min(c.Y, S - 5), c.Z)
+			newSchool(c, deep)
+		end
+		local parts, cframes = {}, {}
+		for i = #schools, 1, -1 do
+			local school = schools[i]
+			-- wander, stay below the surface, scatter if the sub is close
+			local turn = Vector3.new(
+				math.noise(t * 0.2, i) * 0.6,
+				math.noise(t * 0.15, i, 3) * 0.15,
+				math.noise(i, t * 0.2) * 0.6
+			)
+			school.Dir = (school.Dir + turn * dt).Unit
+			if school.Center.Y > S - 5 then
+				school.Dir = Vector3.new(school.Dir.X, -math.abs(school.Dir.Y) - 0.2, school.Dir.Z).Unit
+			end
+			local speed = school.Speed
+			if currentSub and currentSub.PrimaryPart then
+				local away = school.Center - currentSub.PrimaryPart.Position
+				if away.Magnitude < 14 and away.Magnitude > 0.1 then
+					school.Dir = (school.Dir + away.Unit * dt * 4).Unit
+					speed *= 2.5
+				end
+			end
+			school.Center += school.Dir * speed * dt
+			if (school.Center - camPos).Magnitude > 120 then
+				for _, f in ipairs(school.Fish) do
+					f.Body:Destroy()
+					f.Tail:Destroy()
+				end
+				table.remove(schools, i)
+			else
+				local look = school.Dir
+				for _, f in ipairs(school.Fish) do
+					local wob = Vector3.new(
+						math.sin(t + f.Phase) * 1.2,
+						math.sin(t * 1.3 + f.Phase) * 0.5,
+						math.cos(t * 0.9 + f.Phase) * 1.2
+					)
+					local pos = school.Center + f.Offset + wob
+					local cf = CFrame.lookAt(pos, pos + look)
+					table.insert(parts, f.Body)
+					table.insert(cframes, cf)
+					table.insert(parts, f.Tail)
+					table.insert(
+						cframes,
+						cf * CFrame.new(0, 0, 0.75 * f.Size) * CFrame.Angles(0, math.sin(t * 14 + f.Phase) * 0.6, 0)
+					)
+				end
+			end
+		end
+		if #parts > 0 then
+			workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged)
+		end
+	end)
+end
+startOceanLife()
 
 ------------------------------------------------------------------------
 -- VIP chat tag
