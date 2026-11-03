@@ -1682,11 +1682,10 @@ local function onSeatChanged(seat)
 		if sub.PrimaryPart then
 			camera.CameraSubject = sub.PrimaryPart
 		end
-		-- the sub is full of water... but you're sitting, not swimming!
-		local myHum = seat.Occupant
-		if myHum then
-			myHum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-		end
+		-- hide "Board Sub" / shop prompts while you're driving (E = rise!)
+		pcall(function()
+			game:GetService("ProximityPromptService").Enabled = false
+		end)
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -1707,11 +1706,13 @@ local function onSeatChanged(seat)
 		emergencyButton.Visible = false
 		player.CameraMinZoomDistance = 0.5
 		player.CameraMaxZoomDistance = 40
+		pcall(function()
+			game:GetService("ProximityPromptService").Enabled = true
+		end)
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum then
 			camera.CameraSubject = hum
-			hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true)
 		end
 		rebuildStationButtons()
 	end
@@ -1719,6 +1720,9 @@ end
 
 local function onCharacter(char)
 	local hum = char:WaitForChild("Humanoid")
+	-- No swimming: the subs sit in real water, and the swim state would
+	-- throw you out of your seat. (Fall in the harbor = you get fished out.)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
 	hum:GetPropertyChangedSignal("SeatPart"):Connect(function()
 		onSeatChanged(hum.SeatPart)
 	end)
@@ -2135,6 +2139,52 @@ do
 	end)
 end
 
+------------------------------------------------------------------------
+-- Music: calm theme above water, intense track underwater (crossfades)
+------------------------------------------------------------------------
+do
+	local cfg = Config.Music or {}
+	local function makeMusic(objectName, id)
+		local folder = ReplicatedStorage:FindFirstChild("DeepDiveModels")
+		local custom = folder and folder:FindFirstChild(objectName)
+		local snd
+		if custom and custom:IsA("Sound") then
+			snd = custom:Clone()
+		elseif type(id) == "string" and id ~= "" then
+			snd = Instance.new("Sound")
+			snd.SoundId = id
+		end
+		if snd then
+			snd.Name = objectName
+			snd.Looped = true
+			snd.Volume = 0
+			snd.Parent = sounds
+			snd:Play()
+		end
+		return snd
+	end
+	local surfaceMusic = makeMusic("SurfaceMusic", cfg.Surface)
+	local deepMusic = makeMusic("DeepMusic", cfg.Deep)
+	local maxVolume = cfg.Volume or 0.4
+	local fade = math.max(0.2, cfg.FadeTime or 2)
+	if surfaceMusic or deepMusic then
+		RunService.Heartbeat:Connect(function(dt)
+			local depth = S - camera.CFrame.Position.Y
+			local under = depth > 2
+			local step = dt / fade * maxVolume
+			local function toward(snd, target)
+				if snd then
+					local v = snd.Volume
+					snd.Volume = v < target and math.min(target, v + step) or math.max(target, v - step)
+				end
+			end
+			toward(surfaceMusic, under and 0 or maxVolume)
+			-- the deep track gets louder the deeper you go
+			toward(deepMusic, under and maxVolume * (0.7 + 0.3 * math.clamp(depth / 400, 0, 1)) or 0)
+		end)
+	end
+end
+
 -- Smooth monster movement: the server sends where each monster should be,
 -- and we glide it there every frame so it never looks choppy.
 local monsterVisual = setmetatable({}, { __mode = "k" })
@@ -2537,7 +2587,7 @@ local function startOceanLife()
 						motor.Transform = CFrame.Angles(0, 0, angle)
 					end
 					local beacon = sub:FindFirstChild("Beacon")
-					if beacon then
+					if beacon and not sub:GetAttribute("CustomLook") then
 						beacon.Transparency = blink and 0 or 0.7
 					end
 				end

@@ -1,4 +1,4 @@
-<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX00000001"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="Lighting" referent="RBXLIGHT"><Properties><string name="Name">Lighting</string><token name="Technology">4</token><bool name="GlobalShadows">true</bool><float name="EnvironmentDiffuseScale">1</float><float name="EnvironmentSpecularScale">1</float></Properties></Item><Item class="ServerScriptService" referent="RBX00000003"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX00000002"><Properties><string name="Name">DeepDiveServer</string><ProtectedString name="Source"><![CDATA[--[[
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX00000001"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="Lighting" referent="RBXLIGHT"><Properties><string name="Name">Lighting</string><token name="Technology">4</token><bool name="GlobalShadows">true</bool><float name="EnvironmentDiffuseScale">1</float><float name="EnvironmentSpecularScale">1</float></Properties></Item><Item class="ReplicatedStorage" referent="RBXRS"><Properties><string name="Name">ReplicatedStorage</string></Properties><Item class="Folder" referent="RBXMODELS"><Properties><string name="Name">DeepDiveModels</string></Properties><Item class="StringValue" referent="RBXREADME"><Properties><string name="Name">READ_ME</string><string name="Value">Drag free models from the Toolbox into this folder and rename them: Submarine, BiterFish, Jellyfish, Eel, Shop, Warehouse, House, Lighthouse, PalmTree, Crane, Boat. For music, drag Sound objects here named SurfaceMusic and DeepMusic. The game uses whatever it finds here instead of the built-in shapes.</string></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000003"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX00000002"><Properties><string name="Name">DeepDiveServer</string><ProtectedString name="Source"><![CDATA[--[[
 	DEEP DIVE - SERVER SCRIPT
 	=========================
 	WHERE: Explorer > ServerScriptService > (+) Script   (a normal Script)
@@ -506,6 +506,42 @@ Config.Sounds = {
 }
 
 ------------------------------------------------------------------------
+-- MUSIC
+-- Paste audio IDs here (Toolbox > Audio, or Creator Store > Audio, pick a
+-- track, copy the number in its link). Example: "rbxassetid://1234567890"
+-- OR put Sound objects named "SurfaceMusic" and "DeepMusic" inside the
+-- ReplicatedStorage > DeepDiveModels folder. Leave "" for no music.
+------------------------------------------------------------------------
+Config.Music = {
+	Surface = "", -- calm theme on the dock / at the surface
+	Deep = "", -- intense track while diving
+	Volume = 0.4,
+	FadeTime = 2,
+}
+
+------------------------------------------------------------------------
+-- CUSTOM 3D MODELS
+-- Drop real models (Toolbox / Creator Store, or your own from Blender)
+-- into a folder:  ReplicatedStorage > DeepDiveModels
+-- and name them exactly like the keys below. The game swaps them in for
+-- the built-in shapes automatically and scales them to fit.
+-- If a model faces the wrong way, change its Yaw (degrees: 90, 180, -90).
+------------------------------------------------------------------------
+Config.CustomModels = {
+	Submarine = { Yaw = 0 }, -- your sub (its front should point the way the sub drives)
+	BiterFish = { Yaw = 0, Length = 4.5 },
+	Jellyfish = { Yaw = 0, Length = 4 },
+	Eel = { Yaw = 0, Length = 16 },
+	Shop = { Yaw = 0, Size = 28 },
+	Warehouse = { Yaw = 0, Size = 40 },
+	House = { Yaw = 0, Size = 22 }, -- placed around the island
+	Lighthouse = { Yaw = 0, Size = 14 },
+	PalmTree = { Yaw = 0, Size = 16 },
+	Crane = { Yaw = 0, Size = 34 },
+	Boat = { Yaw = 0, Size = 40 }, -- boats anchored out at sea
+}
+
+------------------------------------------------------------------------
 -- HELPERS
 ------------------------------------------------------------------------
 -- Computes the live sub stats from a player's saved upgrades.
@@ -545,6 +581,73 @@ function Config.FormatNumber(n)
 		formatted = formatted:sub(2)
 	end
 	return (n < 0 and "-" or "") .. formatted
+end
+
+-- Finds a custom model in ReplicatedStorage > DeepDiveModels (or nil).
+function Config.GetCustomModel(name)
+	local folder = game:GetService("ReplicatedStorage"):FindFirstChild("DeepDiveModels")
+	local m = folder and folder:FindFirstChild(name)
+	if m and m:IsA("Model") then
+		return m
+	end
+	return nil
+end
+
+-- Clones a custom model, removes its scripts, scales it to `targetSize`
+-- studs and centres it on `cf`. Server only.
+--   opts.Ground  = put the bottom of the model at cf's height (buildings)
+--   opts.AllAxes = measure length/height too, not just the footprint (creatures, subs)
+--   opts.WeldTo  = weld it to this part instead of anchoring (moving things)
+function Config.PlaceCustomModel(name, cf, targetSize, opts)
+	local template = Config.GetCustomModel(name)
+	if not template then
+		return nil
+	end
+	opts = opts or {}
+	local settings = Config.CustomModels[name] or {}
+	local m = template:Clone()
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("BaseScript") or d:IsA("ModuleScript") or d:IsA("Humanoid") or d:IsA("AnimationController") then
+			d:Destroy()
+		elseif d:IsA("Seat") or d:IsA("VehicleSeat") then
+			d.Disabled = true
+		end
+	end
+	local _, size = m:GetBoundingBox()
+	local biggest = math.max(size.X, size.Z)
+	if opts.AllAxes then
+		biggest = math.max(biggest, size.Y)
+	end
+	if biggest > 0 and targetSize then
+		pcall(function()
+			m:ScaleTo(m:GetScale() * targetSize / biggest)
+		end)
+	end
+	local boxCF, box = m:GetBoundingBox()
+	local offset = boxCF:ToObjectSpace(m:GetPivot())
+	local placeCF = cf * CFrame.Angles(0, math.rad(settings.Yaw or 0), 0)
+	if opts.Ground then
+		placeCF = placeCF * CFrame.new(0, box.Y / 2, 0)
+	end
+	m:PivotTo(placeCF * offset)
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("BasePart") then
+			if opts.WeldTo then
+				d.Anchored = false
+				d.Massless = true
+				d.CanCollide = false
+				d.CanTouch = false
+				d.CanQuery = false
+				local w = Instance.new("WeldConstraint")
+				w.Part0 = opts.WeldTo
+				w.Part1 = d
+				w.Parent = d
+			else
+				d.Anchored = true
+			end
+		end
+	end
+	return m
 end
 
 return Config
@@ -841,6 +944,26 @@ local function buildTerrain()
 	terrain:FillCylinder(CFrame.new(0, S - 9, 0), 20, 320, M.Sand)
 	terrain:FillCylinder(CFrame.new(0, S - 8.5, 0), 23, 300, M.Grass)
 	task.wait()
+	-- Distant islands on the horizon (so the view isn't empty)
+	for i = 1, 9 do
+		local a = i / 9 * TAU + rng:NextNumber(-0.25, 0.25)
+		local r = rng:NextNumber(560, 900)
+		local cx, cz = math.cos(a) * r, math.sin(a) * r
+		local height = rng:NextNumber(25, 110)
+		local radius = rng:NextNumber(50, 120)
+		for k = 0, 5 do
+			local t = k / 5
+			local bx = cx + rng:NextNumber(-radius, radius) * 0.4
+			local bz = cz + rng:NextNumber(-radius, radius) * 0.4
+			terrain:FillBall(
+				Vector3.new(bx, S - 20 + height * t, bz),
+				radius * (1 - t * 0.75),
+				t > 0.5 and M.Grass or (t > 0.2 and M.Rock or M.Sand)
+			)
+		end
+		terrain:FillCylinder(CFrame.new(cx, S - 6, cz), 10, radius * 1.15, M.Sand)
+		task.wait()
+	end
 
 	-- The Well itself, written voxel by voxel so the walls are smooth
 	local RES = 4
@@ -1101,6 +1224,150 @@ local function building(parent, cf, w, d, h, wallColor, roofColor, label)
 	return model
 end
 
+-- Swap in a real model from ReplicatedStorage > DeepDiveModels if there is one.
+-- cf uses this file's "radial" frames (-X faces the Well); models usually face
+-- -Z, so we turn them 90 degrees so their front faces the middle.
+local function useCustom(name, cf, size, parent)
+	local m = Config.PlaceCustomModel(name, cf * CFrame.Angles(0, math.rad(90), 0), size, { Ground = true })
+	if m then
+		m.Parent = parent
+	end
+	return m
+end
+
+local function cottage(parent, cf)
+	local model = Instance.new("Model")
+	model.Name = "Cottage"
+	model.Parent = parent
+	local wallColors = {
+		Color3.fromRGB(240, 230, 210),
+		Color3.fromRGB(200, 225, 235),
+		Color3.fromRGB(245, 215, 190),
+		Color3.fromRGB(215, 235, 205),
+	}
+	local roofColors = { Color3.fromRGB(170, 60, 45), Color3.fromRGB(50, 80, 120), Color3.fromRGB(90, 70, 60) }
+	local w, d, h = 18, 14, 9
+	part({
+		Name = "Walls",
+		Size = Vector3.new(d, h, w),
+		CFrame = cf * CFrame.new(0, h / 2, 0),
+		Material = M.Plaster,
+		Color = wallColors[rng:NextInteger(1, #wallColors)],
+		CastShadow = true,
+		Parent = model,
+	})
+	local roofColor = roofColors[rng:NextInteger(1, #roofColors)]
+	for _, side in ipairs({ -1, 1 }) do
+		local roof = Instance.new("WedgePart")
+		roof.Anchored = true
+		roof.Size = Vector3.new(w + 1.5, 5, d / 2 + 1)
+		roof.CFrame = cf * CFrame.new(side * (d / 4 + 0.25), h + 2.5, 0) * CFrame.Angles(0, side * math.rad(90), 0)
+		roof.Material = M.Slate
+		roof.Color = roofColor
+		roof.Parent = model
+	end
+	part({
+		Name = "Chimney",
+		Size = Vector3.new(1.6, 4, 1.6),
+		CFrame = cf * CFrame.new(2, h + 4, w * 0.3),
+		Material = M.Brick,
+		Color = Color3.fromRGB(140, 70, 55),
+		Parent = model,
+	})
+	part({
+		Name = "Door",
+		Size = Vector3.new(0.3, 5, 2.6),
+		CFrame = cf * CFrame.new(-d / 2 - 0.1, 2.5, 0),
+		Material = M.Wood,
+		Color = DARK_WOOD,
+		Parent = model,
+	})
+	for _, z in ipairs({ -5, 5 }) do
+		deco({
+			Name = "Window",
+			Size = Vector3.new(0.2, 2.4, 2.6),
+			CFrame = cf * CFrame.new(-d / 2 - 0.1, 5, z),
+			Material = M.Neon,
+			Color = Color3.fromRGB(255, 220, 160),
+			Parent = model,
+		})
+		deco({
+			Name = "Shutter",
+			Size = Vector3.new(0.2, 2.6, 0.6),
+			CFrame = cf * CFrame.new(-d / 2 - 0.15, 5, z - 1.6),
+			Material = M.Wood,
+			Color = roofColor,
+			Parent = model,
+		})
+	end
+	-- little picket fence out front
+	for z = -w / 2, w / 2, 1.5 do
+		if math.abs(z) > 2 then
+			deco({
+				Name = "Picket",
+				Size = Vector3.new(0.25, 2, 0.4),
+				CFrame = cf * CFrame.new(-d / 2 - 4, 1, z),
+				Material = M.Wood,
+				Color = Color3.fromRGB(245, 245, 240),
+				Parent = model,
+			})
+		end
+	end
+	return model
+end
+
+local function sailboat(parent, cf)
+	local model = Instance.new("Model")
+	model.Name = "Sailboat"
+	model.Parent = parent
+	local hullColor = rng:NextNumber() < 0.5 and Color3.fromRGB(245, 245, 245) or Color3.fromRGB(40, 70, 120)
+	part({
+		Name = "Hull",
+		Size = Vector3.new(7, 3.5, 22),
+		CFrame = cf * CFrame.new(0, 0.6, 0),
+		Material = M.SmoothPlastic,
+		Color = hullColor,
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Deck",
+		Size = Vector3.new(5.6, 0.4, 17),
+		CFrame = cf * CFrame.new(0, 1.9, 0),
+		Material = M.WoodPlanks,
+		Color = WOOD,
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Cabin",
+		Size = Vector3.new(4, 2, 6),
+		CFrame = cf * CFrame.new(0, 2.8, 2),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(235, 235, 235),
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Mast",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(20, 0.4, 0.4),
+		CFrame = cf * CFrame.new(0, 12, -1) * CFrame.Angles(0, 0, math.rad(90)),
+		Material = M.Metal,
+		Color = Color3.fromRGB(200, 200, 205),
+		Parent = model,
+	})
+	local sail = Instance.new("WedgePart")
+	sail.Anchored = true
+	sail.CanCollide = false
+	sail.Size = Vector3.new(0.15, 17, 8)
+	sail.CFrame = cf * CFrame.new(0, 11.5, 3.2) * CFrame.Angles(0, math.pi, 0)
+	sail.Material = M.Fabric
+	sail.Color = Color3.fromRGB(250, 248, 240)
+	sail.Parent = model
+	return model
+end
+
 local function buildHarbor(root)
 	local dock = Instance.new("Folder")
 	dock.Name = "Dock"
@@ -1321,6 +1588,18 @@ local function buildHarbor(root)
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = counter
 	WorldBuilder.ShopPrompt = prompt
+	task.defer(function()
+		-- a real shop model replaces the built-in hut (the prompt stays at the counter)
+		if useCustom("Shop", shopCF * CFrame.new(3, 0, 0), Config.CustomModels.Shop.Size, dock) then
+			for _, p in ipairs(shop:GetDescendants()) do
+				if p:IsA("BasePart") and p ~= counter then
+					p:Destroy()
+				end
+			end
+			counter.Transparency = 1
+			counter.CanCollide = false
+		end
+	end)
 	for _, z in ipairs({ -5, 0, 5 }) do
 		deco({
 			Name = "Goods",
@@ -1418,7 +1697,9 @@ local function buildHarbor(root)
 	}
 	for i, a in ipairs({ 1.6, 3.15, 4.7 }) do
 		local cf = radial(178, a, DOCK_TOP - 1)
-		building(dock, cf, 40, 22, 16, Color3.fromRGB(150, 150, 155), Color3.fromRGB(70, 80, 95), "WAREHOUSE " .. i)
+		if not useCustom("Warehouse", cf, Config.CustomModels.Warehouse.Size, dock) then
+			building(dock, cf, 40, 22, 16, Color3.fromRGB(150, 150, 155), Color3.fromRGB(70, 80, 95), "WAREHOUSE " .. i)
+		end
 		for c = 0, 2 do
 			local ccf = radial(150, a + 0.22 + c * 0.07, DOCK_TOP + 3.25) * CFrame.Angles(0, math.rad(90), 0)
 			container(dock, ccf, palette[(i + c) % #palette + 1])
@@ -1430,6 +1711,9 @@ local function buildHarbor(root)
 
 	-- Dock crane leaning over the water
 	local craneA = 2.35
+	local craneModel = Instance.new("Model")
+	craneModel.Name = "Crane"
+	craneModel.Parent = dock
 	local craneCF = radial(BOARD_IN + 8, craneA, DOCK_TOP)
 	local yellow = Color3.fromRGB(240, 185, 30)
 	for _, x in ipairs({ -2.5, 2.5 }) do
@@ -1440,7 +1724,7 @@ local function buildHarbor(root)
 				CFrame = craneCF * CFrame.new(x, 15, z),
 				Material = M.Metal,
 				Color = yellow,
-				Parent = dock,
+				Parent = craneModel,
 			})
 		end
 	end
@@ -1451,7 +1735,7 @@ local function buildHarbor(root)
 			CFrame = craneCF * CFrame.new(0, h, 0),
 			Material = M.Metal,
 			Color = yellow,
-			Parent = dock,
+			Parent = craneModel,
 		})
 	end
 	part({
@@ -1460,7 +1744,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(0, 32, 0),
 		Material = M.Metal,
 		Color = yellow,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	part({
 		Name = "CraneBoom",
@@ -1468,7 +1752,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(-15, 33.5, 0),
 		Material = M.Metal,
 		Color = yellow,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	deco({
 		Name = "CraneCable",
@@ -1476,7 +1760,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(-30, 24.5, 0),
 		Material = M.Metal,
 		Color = IRON,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	part({
 		Name = "CraneHook",
@@ -1485,8 +1769,12 @@ local function buildHarbor(root)
 		Material = M.Metal,
 		Color = IRON,
 		Mesh = SPHERE,
-		Parent = dock,
+		Parent = craneModel,
 	})
+
+	if useCustom("Crane", craneCF, Config.CustomModels.Crane.Size, dock) then
+		craneModel:Destroy()
+	end
 
 	-- Crates, barrels, benches scattered on the plaza
 	for _ = 1, 30 do
@@ -1522,10 +1810,21 @@ local function buildHarbor(root)
 	for _ = 1, 22 do
 		local a = rng:NextNumber(0, TAU)
 		local r = rng:NextNumber(205, 285)
-		palmTree(dock, Vector3.new(math.cos(a) * r, S + 3.3, math.sin(a) * r))
+		local pos = Vector3.new(math.cos(a) * r, S + 3.1, math.sin(a) * r)
+		local cf = CFrame.new(pos) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+		local size = Config.CustomModels.PalmTree.Size * rng:NextNumber(0.85, 1.2)
+		local tree = Config.PlaceCustomModel("PalmTree", cf, size, { Ground = true, AllAxes = true })
+		if tree then
+			tree.Parent = dock
+		else
+			palmTree(dock, pos)
+		end
 	end
 
 	-- Lighthouse
+	local lhModel = Instance.new("Model")
+	lhModel.Name = "Lighthouse"
+	lhModel.Parent = dock
 	local lhPos = Vector3.new(math.cos(3.9) * 255, S + 3, math.sin(3.9) * 255)
 	for i = 0, 6 do
 		part({
@@ -1536,7 +1835,7 @@ local function buildHarbor(root)
 			Material = M.SmoothPlastic,
 			Color = (i % 2 == 0) and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(200, 40, 40),
 			CastShadow = true,
-			Parent = dock,
+			Parent = lhModel,
 		})
 	end
 	local beacon = deco({
@@ -1546,7 +1845,7 @@ local function buildHarbor(root)
 		CFrame = CFrame.new(lhPos + Vector3.new(0, 52, 0)),
 		Material = M.Neon,
 		Color = Color3.fromRGB(255, 240, 170),
-		Parent = dock,
+		Parent = lhModel,
 	})
 	light(beacon, 60, 2, Color3.fromRGB(255, 235, 170), false)
 	part({
@@ -1556,8 +1855,33 @@ local function buildHarbor(root)
 		Material = M.Metal,
 		Color = Color3.fromRGB(40, 40, 45),
 		Mesh = SPHERE,
-		Parent = dock,
+		Parent = lhModel,
 	})
+
+	if useCustom("Lighthouse", CFrame.new(lhPos), Config.CustomModels.Lighthouse.Size, dock) then
+		lhModel:Destroy()
+	end
+
+	-- Cottages around the island
+	for i, a in ipairs({ 0.45, 0.95, 2.05, 2.75, 3.45, 4.25, 5.25, 5.85 }) do
+		local cf = radial(232 + (i % 2) * 18, a, S + 3)
+		if not useCustom("House", cf, Config.CustomModels.House.Size, dock) then
+			cottage(dock, cf)
+		end
+	end
+
+	-- Boats anchored out at sea
+	for i = 1, 7 do
+		local a = i / 7 * TAU + rng:NextNumber(-0.2, 0.2)
+		local r = rng:NextNumber(400, 680)
+		local cf = CFrame.new(math.cos(a) * r, S, math.sin(a) * r) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+		local boat = Config.PlaceCustomModel("Boat", cf, Config.CustomModels.Boat.Size, { Ground = false })
+		if boat then
+			boat.Parent = dock
+		else
+			sailboat(dock, cf)
+		end
+	end
 
 	-- Buoys floating in the Well
 	for i = 1, 8 do
@@ -2025,6 +2349,17 @@ local function setupLighting(root)
 	Lighting.EnvironmentDiffuseScale = 1
 	Lighting.EnvironmentSpecularScale = 1
 	Lighting.FogEnd = 100000
+	-- real volumetric clouds and swaying terrain grass
+	pcall(function()
+		local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds")
+		clouds.Cover = 0.55
+		clouds.Density = 0.7
+		clouds.Color = Color3.fromRGB(255, 255, 255)
+		clouds.Parent = workspace.Terrain
+	end)
+	pcall(function()
+		workspace.Terrain.Decoration = true
+	end)
 
 	_ = root
 end
@@ -2477,7 +2812,7 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 		seat.Size = Vector3.new(2, 0.6, 2)
 		seat.Transparency = 1
 		seat.CanCollide = false
-		seat.CanTouch = false -- boarding happens through the prompt only
+		seat.CanTouch = true -- (seats are hidden inside the hull; boarding uses the prompt)
 		seat.Massless = true
 		seat.Anchored = false
 		seat.CFrame = CFrame.new(info[2], seatY, HL * info[3])
@@ -2524,6 +2859,19 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	prompt.RequiresLineOfSight = false
 	prompt.HoldDuration = 0
 	prompt.Parent = promptAtt
+
+	-- Custom 3D model? (ReplicatedStorage > DeepDiveModels > Submarine)
+	local custom = Config.PlaceCustomModel("Submarine", root.CFrame, HL * 1.05, { WeldTo = root, AllAxes = true })
+	if custom then
+		custom.Name = "CustomLook"
+		for _, p in ipairs(model:GetDescendants()) do
+			if p:IsA("BasePart") and p ~= root and p.Name ~= "Barrel" then
+				p.Transparency = 1 -- keep the invisible hull for collisions, show the real model
+			end
+		end
+		custom.Parent = model
+		model:SetAttribute("CustomLook", true)
+	end
 
 	model:SetAttribute("IsSub", true)
 	model:SetAttribute("HullLength", L)
@@ -3274,7 +3622,19 @@ local function spawnMonster(kind, position, packId)
 	if not def or not builder then
 		return
 	end
-	local model, root = builder()
+	local model, root
+	local custom = Config.GetCustomModel(kind)
+	if custom then
+		-- ReplicatedStorage > DeepDiveModels > BiterFish / Jellyfish / Eel
+		model = Instance.new("Model")
+		model.Name = kind
+		root = makeRoot(model, Vector3.new(3, 3, 4))
+		local length = (Config.CustomModels[kind] or {}).Length or 4
+		local look = Config.PlaceCustomModel(kind, CFrame.new(), length, { WeldTo = root, AllAxes = true })
+		look.Parent = model
+	else
+		model, root = builder()
+	end
 	local depth = S - position.Y
 	local mult = zoneMult(depth)
 	nextId += 1
@@ -4143,10 +4503,20 @@ local function onLeftSeat(sub, player, seat)
 	end
 	local hum = getHumanoid(player)
 	local alive = hum and hum.Health > 0 and player.Parent ~= nil
-	if alive and sub.Depth > Config.SurfaceDepth then
-		-- You can't open the hatch underwater! Put them back in the seat.
+	-- Nobody leaves a sub by accident (water, physics hiccups, jump key).
+	-- The only way out is the LEAVE SUB button. Put them straight back.
+	local now = os.clock()
+	sub.Reseats = sub.Reseats or {}
+	local log = sub.Reseats[player] or { Count = 0, Since = now }
+	if now - log.Since > 10 then
+		log.Count, log.Since = 0, now
+	end
+	log.Count += 1
+	sub.Reseats[player] = log
+	if alive and log.Count <= 6 then
 		task.delay(0.05, function()
 			if not sub.Destroyed and seat.Parent and not seat.Occupant and hum.Parent and hum.Health > 0 then
+				hum.Sit = false
 				seat:Sit(hum)
 			else
 				removeFromCrew(sub, player)
@@ -4157,7 +4527,7 @@ local function onLeftSeat(sub, player, seat)
 	end
 	removeFromCrew(sub, player)
 	if alive then
-		task.defer(teleportToDock, player) -- pop them out of the hatch onto the pier
+		task.defer(teleportToDock, player)
 	end
 end
 
@@ -5250,10 +5620,10 @@ RunService.Heartbeat:Connect(function(dt)
 		if not seatedIn[plr] then
 			local _, char = getHumanoid(plr)
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if hrp and hrp.Position.Y < S - 18 then
+			if hrp and hrp.Position.Y < S - 4 then
 				teleportToDock(plr)
 				if rateOk(plr, "splash", 5) then
-					notify(plr, "Too deep to swim! You need a sub to explore down there.", "info")
+					notify(plr, "Splash! You got fished out. Board your sub to explore the Well.", "info")
 				end
 			end
 		end
@@ -7643,11 +8013,10 @@ local function onSeatChanged(seat)
 		if sub.PrimaryPart then
 			camera.CameraSubject = sub.PrimaryPart
 		end
-		-- the sub is full of water... but you're sitting, not swimming!
-		local myHum = seat.Occupant
-		if myHum then
-			myHum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-		end
+		-- hide "Board Sub" / shop prompts while you're driving (E = rise!)
+		pcall(function()
+			game:GetService("ProximityPromptService").Enabled = false
+		end)
 		if not wasIn then
 			player.CameraMaxZoomDistance = 90
 			player.CameraMinZoomDistance = 28
@@ -7668,11 +8037,13 @@ local function onSeatChanged(seat)
 		emergencyButton.Visible = false
 		player.CameraMinZoomDistance = 0.5
 		player.CameraMaxZoomDistance = 40
+		pcall(function()
+			game:GetService("ProximityPromptService").Enabled = true
+		end)
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum then
 			camera.CameraSubject = hum
-			hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, true)
 		end
 		rebuildStationButtons()
 	end
@@ -7680,6 +8051,9 @@ end
 
 local function onCharacter(char)
 	local hum = char:WaitForChild("Humanoid")
+	-- No swimming: the subs sit in real water, and the swim state would
+	-- throw you out of your seat. (Fall in the harbor = you get fished out.)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
 	hum:GetPropertyChangedSignal("SeatPart"):Connect(function()
 		onSeatChanged(hum.SeatPart)
 	end)
@@ -8096,6 +8470,52 @@ do
 	end)
 end
 
+------------------------------------------------------------------------
+-- Music: calm theme above water, intense track underwater (crossfades)
+------------------------------------------------------------------------
+do
+	local cfg = Config.Music or {}
+	local function makeMusic(objectName, id)
+		local folder = ReplicatedStorage:FindFirstChild("DeepDiveModels")
+		local custom = folder and folder:FindFirstChild(objectName)
+		local snd
+		if custom and custom:IsA("Sound") then
+			snd = custom:Clone()
+		elseif type(id) == "string" and id ~= "" then
+			snd = Instance.new("Sound")
+			snd.SoundId = id
+		end
+		if snd then
+			snd.Name = objectName
+			snd.Looped = true
+			snd.Volume = 0
+			snd.Parent = sounds
+			snd:Play()
+		end
+		return snd
+	end
+	local surfaceMusic = makeMusic("SurfaceMusic", cfg.Surface)
+	local deepMusic = makeMusic("DeepMusic", cfg.Deep)
+	local maxVolume = cfg.Volume or 0.4
+	local fade = math.max(0.2, cfg.FadeTime or 2)
+	if surfaceMusic or deepMusic then
+		RunService.Heartbeat:Connect(function(dt)
+			local depth = S - camera.CFrame.Position.Y
+			local under = depth > 2
+			local step = dt / fade * maxVolume
+			local function toward(snd, target)
+				if snd then
+					local v = snd.Volume
+					snd.Volume = v < target and math.min(target, v + step) or math.max(target, v - step)
+				end
+			end
+			toward(surfaceMusic, under and 0 or maxVolume)
+			-- the deep track gets louder the deeper you go
+			toward(deepMusic, under and maxVolume * (0.7 + 0.3 * math.clamp(depth / 400, 0, 1)) or 0)
+		end)
+	end
+end
+
 -- Smooth monster movement: the server sends where each monster should be,
 -- and we glide it there every frame so it never looks choppy.
 local monsterVisual = setmetatable({}, { __mode = "k" })
@@ -8498,7 +8918,7 @@ local function startOceanLife()
 						motor.Transform = CFrame.Angles(0, 0, angle)
 					end
 					local beacon = sub:FindFirstChild("Beacon")
-					if beacon then
+					if beacon and not sub:GetAttribute("CustomLook") then
 						beacon.Transparency = blink and 0 or 0.7
 					end
 				end

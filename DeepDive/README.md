@@ -139,3 +139,34 @@ If something breaks, open **View > Output** and copy the red error text.
 
 After editing anything in `src/`, run `python3 tools/build_place.py` to
 regenerate `DeepDive.rbxlx`.
+
+---
+
+## Make it look amazing: real 3D models and music
+
+A script can't create real 3D models or music. Those come from the Roblox
+Creator Store, or from Blender. The game is built to swap them in
+automatically:
+
+1. In Studio, open **View > Toolbox**, choose **Models**, and search for things
+   like "submarine", "piranha", "jellyfish", "eel", "harbor shop",
+   "warehouse", "house", "lighthouse", "palm tree", "crane" or "boat".
+2. Click a model to insert it, then drag it in the **Explorer** into
+   **ReplicatedStorage > DeepDiveModels**.
+3. Rename it to one of these exact names: `Submarine`, `BiterFish`,
+   `Jellyfish`, `Eel`, `Shop`, `Warehouse`, `House`, `Lighthouse`,
+   `PalmTree`, `Crane`, `Boat`.
+4. Press Play. The game clones it, removes its scripts, scales it to the
+   right size and uses it in place of the built-in shapes.
+   * If it faces the wrong way, change its `Yaw` in `Config.CustomModels`
+     (try 90, 180 or -90).
+   * If it's too big or small, change its `Size` or `Length`.
+
+**Music:** in the Toolbox choose **Audio**, find a calm track and an intense
+one, and drag both into **DeepDiveModels**. Rename them `SurfaceMusic` and
+`DeepMusic`. Or paste their IDs into `Config.Music`. The calm track plays
+above water and crossfades to the intense one when you dive.
+
+Tip: only use models from creators you trust, and check that a model has no
+scripts you didn't expect. The game deletes scripts inside swapped models
+anyway.

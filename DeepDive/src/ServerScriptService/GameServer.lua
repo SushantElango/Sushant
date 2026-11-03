@@ -442,10 +442,20 @@ local function onLeftSeat(sub, player, seat)
 	end
 	local hum = getHumanoid(player)
 	local alive = hum and hum.Health > 0 and player.Parent ~= nil
-	if alive and sub.Depth > Config.SurfaceDepth then
-		-- You can't open the hatch underwater! Put them back in the seat.
+	-- Nobody leaves a sub by accident (water, physics hiccups, jump key).
+	-- The only way out is the LEAVE SUB button. Put them straight back.
+	local now = os.clock()
+	sub.Reseats = sub.Reseats or {}
+	local log = sub.Reseats[player] or { Count = 0, Since = now }
+	if now - log.Since > 10 then
+		log.Count, log.Since = 0, now
+	end
+	log.Count += 1
+	sub.Reseats[player] = log
+	if alive and log.Count <= 6 then
 		task.delay(0.05, function()
 			if not sub.Destroyed and seat.Parent and not seat.Occupant and hum.Parent and hum.Health > 0 then
+				hum.Sit = false
 				seat:Sit(hum)
 			else
 				removeFromCrew(sub, player)
@@ -456,7 +466,7 @@ local function onLeftSeat(sub, player, seat)
 	end
 	removeFromCrew(sub, player)
 	if alive then
-		task.defer(teleportToDock, player) -- pop them out of the hatch onto the pier
+		task.defer(teleportToDock, player)
 	end
 end
 
@@ -1549,10 +1559,10 @@ RunService.Heartbeat:Connect(function(dt)
 		if not seatedIn[plr] then
 			local _, char = getHumanoid(plr)
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if hrp and hrp.Position.Y < S - 18 then
+			if hrp and hrp.Position.Y < S - 4 then
 				teleportToDock(plr)
 				if rateOk(plr, "splash", 5) then
-					notify(plr, "Too deep to swim! You need a sub to explore down there.", "info")
+					notify(plr, "Splash! You got fished out. Board your sub to explore the Well.", "info")
 				end
 			end
 		end

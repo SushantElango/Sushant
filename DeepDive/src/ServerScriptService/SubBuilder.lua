@@ -419,7 +419,7 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 		seat.Size = Vector3.new(2, 0.6, 2)
 		seat.Transparency = 1
 		seat.CanCollide = false
-		seat.CanTouch = false -- boarding happens through the prompt only
+		seat.CanTouch = true -- (seats are hidden inside the hull; boarding uses the prompt)
 		seat.Massless = true
 		seat.Anchored = false
 		seat.CFrame = CFrame.new(info[2], seatY, HL * info[3])
@@ -466,6 +466,19 @@ function SubBuilder.Build(hullLevel, paintColor, lightColor, ownerName, isVIP)
 	prompt.RequiresLineOfSight = false
 	prompt.HoldDuration = 0
 	prompt.Parent = promptAtt
+
+	-- Custom 3D model? (ReplicatedStorage > DeepDiveModels > Submarine)
+	local custom = Config.PlaceCustomModel("Submarine", root.CFrame, HL * 1.05, { WeldTo = root, AllAxes = true })
+	if custom then
+		custom.Name = "CustomLook"
+		for _, p in ipairs(model:GetDescendants()) do
+			if p:IsA("BasePart") and p ~= root and p.Name ~= "Barrel" then
+				p.Transparency = 1 -- keep the invisible hull for collisions, show the real model
+			end
+		end
+		custom.Parent = model
+		model:SetAttribute("CustomLook", true)
+	end
 
 	model:SetAttribute("IsSub", true)
 	model:SetAttribute("HullLength", L)

@@ -288,6 +288,26 @@ local function buildTerrain()
 	terrain:FillCylinder(CFrame.new(0, S - 9, 0), 20, 320, M.Sand)
 	terrain:FillCylinder(CFrame.new(0, S - 8.5, 0), 23, 300, M.Grass)
 	task.wait()
+	-- Distant islands on the horizon (so the view isn't empty)
+	for i = 1, 9 do
+		local a = i / 9 * TAU + rng:NextNumber(-0.25, 0.25)
+		local r = rng:NextNumber(560, 900)
+		local cx, cz = math.cos(a) * r, math.sin(a) * r
+		local height = rng:NextNumber(25, 110)
+		local radius = rng:NextNumber(50, 120)
+		for k = 0, 5 do
+			local t = k / 5
+			local bx = cx + rng:NextNumber(-radius, radius) * 0.4
+			local bz = cz + rng:NextNumber(-radius, radius) * 0.4
+			terrain:FillBall(
+				Vector3.new(bx, S - 20 + height * t, bz),
+				radius * (1 - t * 0.75),
+				t > 0.5 and M.Grass or (t > 0.2 and M.Rock or M.Sand)
+			)
+		end
+		terrain:FillCylinder(CFrame.new(cx, S - 6, cz), 10, radius * 1.15, M.Sand)
+		task.wait()
+	end
 
 	-- The Well itself, written voxel by voxel so the walls are smooth
 	local RES = 4
@@ -548,6 +568,150 @@ local function building(parent, cf, w, d, h, wallColor, roofColor, label)
 	return model
 end
 
+-- Swap in a real model from ReplicatedStorage > DeepDiveModels if there is one.
+-- cf uses this file's "radial" frames (-X faces the Well); models usually face
+-- -Z, so we turn them 90 degrees so their front faces the middle.
+local function useCustom(name, cf, size, parent)
+	local m = Config.PlaceCustomModel(name, cf * CFrame.Angles(0, math.rad(90), 0), size, { Ground = true })
+	if m then
+		m.Parent = parent
+	end
+	return m
+end
+
+local function cottage(parent, cf)
+	local model = Instance.new("Model")
+	model.Name = "Cottage"
+	model.Parent = parent
+	local wallColors = {
+		Color3.fromRGB(240, 230, 210),
+		Color3.fromRGB(200, 225, 235),
+		Color3.fromRGB(245, 215, 190),
+		Color3.fromRGB(215, 235, 205),
+	}
+	local roofColors = { Color3.fromRGB(170, 60, 45), Color3.fromRGB(50, 80, 120), Color3.fromRGB(90, 70, 60) }
+	local w, d, h = 18, 14, 9
+	part({
+		Name = "Walls",
+		Size = Vector3.new(d, h, w),
+		CFrame = cf * CFrame.new(0, h / 2, 0),
+		Material = M.Plaster,
+		Color = wallColors[rng:NextInteger(1, #wallColors)],
+		CastShadow = true,
+		Parent = model,
+	})
+	local roofColor = roofColors[rng:NextInteger(1, #roofColors)]
+	for _, side in ipairs({ -1, 1 }) do
+		local roof = Instance.new("WedgePart")
+		roof.Anchored = true
+		roof.Size = Vector3.new(w + 1.5, 5, d / 2 + 1)
+		roof.CFrame = cf * CFrame.new(side * (d / 4 + 0.25), h + 2.5, 0) * CFrame.Angles(0, side * math.rad(90), 0)
+		roof.Material = M.Slate
+		roof.Color = roofColor
+		roof.Parent = model
+	end
+	part({
+		Name = "Chimney",
+		Size = Vector3.new(1.6, 4, 1.6),
+		CFrame = cf * CFrame.new(2, h + 4, w * 0.3),
+		Material = M.Brick,
+		Color = Color3.fromRGB(140, 70, 55),
+		Parent = model,
+	})
+	part({
+		Name = "Door",
+		Size = Vector3.new(0.3, 5, 2.6),
+		CFrame = cf * CFrame.new(-d / 2 - 0.1, 2.5, 0),
+		Material = M.Wood,
+		Color = DARK_WOOD,
+		Parent = model,
+	})
+	for _, z in ipairs({ -5, 5 }) do
+		deco({
+			Name = "Window",
+			Size = Vector3.new(0.2, 2.4, 2.6),
+			CFrame = cf * CFrame.new(-d / 2 - 0.1, 5, z),
+			Material = M.Neon,
+			Color = Color3.fromRGB(255, 220, 160),
+			Parent = model,
+		})
+		deco({
+			Name = "Shutter",
+			Size = Vector3.new(0.2, 2.6, 0.6),
+			CFrame = cf * CFrame.new(-d / 2 - 0.15, 5, z - 1.6),
+			Material = M.Wood,
+			Color = roofColor,
+			Parent = model,
+		})
+	end
+	-- little picket fence out front
+	for z = -w / 2, w / 2, 1.5 do
+		if math.abs(z) > 2 then
+			deco({
+				Name = "Picket",
+				Size = Vector3.new(0.25, 2, 0.4),
+				CFrame = cf * CFrame.new(-d / 2 - 4, 1, z),
+				Material = M.Wood,
+				Color = Color3.fromRGB(245, 245, 240),
+				Parent = model,
+			})
+		end
+	end
+	return model
+end
+
+local function sailboat(parent, cf)
+	local model = Instance.new("Model")
+	model.Name = "Sailboat"
+	model.Parent = parent
+	local hullColor = rng:NextNumber() < 0.5 and Color3.fromRGB(245, 245, 245) or Color3.fromRGB(40, 70, 120)
+	part({
+		Name = "Hull",
+		Size = Vector3.new(7, 3.5, 22),
+		CFrame = cf * CFrame.new(0, 0.6, 0),
+		Material = M.SmoothPlastic,
+		Color = hullColor,
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Deck",
+		Size = Vector3.new(5.6, 0.4, 17),
+		CFrame = cf * CFrame.new(0, 1.9, 0),
+		Material = M.WoodPlanks,
+		Color = WOOD,
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Cabin",
+		Size = Vector3.new(4, 2, 6),
+		CFrame = cf * CFrame.new(0, 2.8, 2),
+		Material = M.SmoothPlastic,
+		Color = Color3.fromRGB(235, 235, 235),
+		Mesh = SPHERE,
+		Parent = model,
+	})
+	part({
+		Name = "Mast",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(20, 0.4, 0.4),
+		CFrame = cf * CFrame.new(0, 12, -1) * CFrame.Angles(0, 0, math.rad(90)),
+		Material = M.Metal,
+		Color = Color3.fromRGB(200, 200, 205),
+		Parent = model,
+	})
+	local sail = Instance.new("WedgePart")
+	sail.Anchored = true
+	sail.CanCollide = false
+	sail.Size = Vector3.new(0.15, 17, 8)
+	sail.CFrame = cf * CFrame.new(0, 11.5, 3.2) * CFrame.Angles(0, math.pi, 0)
+	sail.Material = M.Fabric
+	sail.Color = Color3.fromRGB(250, 248, 240)
+	sail.Parent = model
+	return model
+end
+
 local function buildHarbor(root)
 	local dock = Instance.new("Folder")
 	dock.Name = "Dock"
@@ -768,6 +932,18 @@ local function buildHarbor(root)
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = counter
 	WorldBuilder.ShopPrompt = prompt
+	task.defer(function()
+		-- a real shop model replaces the built-in hut (the prompt stays at the counter)
+		if useCustom("Shop", shopCF * CFrame.new(3, 0, 0), Config.CustomModels.Shop.Size, dock) then
+			for _, p in ipairs(shop:GetDescendants()) do
+				if p:IsA("BasePart") and p ~= counter then
+					p:Destroy()
+				end
+			end
+			counter.Transparency = 1
+			counter.CanCollide = false
+		end
+	end)
 	for _, z in ipairs({ -5, 0, 5 }) do
 		deco({
 			Name = "Goods",
@@ -865,7 +1041,9 @@ local function buildHarbor(root)
 	}
 	for i, a in ipairs({ 1.6, 3.15, 4.7 }) do
 		local cf = radial(178, a, DOCK_TOP - 1)
-		building(dock, cf, 40, 22, 16, Color3.fromRGB(150, 150, 155), Color3.fromRGB(70, 80, 95), "WAREHOUSE " .. i)
+		if not useCustom("Warehouse", cf, Config.CustomModels.Warehouse.Size, dock) then
+			building(dock, cf, 40, 22, 16, Color3.fromRGB(150, 150, 155), Color3.fromRGB(70, 80, 95), "WAREHOUSE " .. i)
+		end
 		for c = 0, 2 do
 			local ccf = radial(150, a + 0.22 + c * 0.07, DOCK_TOP + 3.25) * CFrame.Angles(0, math.rad(90), 0)
 			container(dock, ccf, palette[(i + c) % #palette + 1])
@@ -877,6 +1055,9 @@ local function buildHarbor(root)
 
 	-- Dock crane leaning over the water
 	local craneA = 2.35
+	local craneModel = Instance.new("Model")
+	craneModel.Name = "Crane"
+	craneModel.Parent = dock
 	local craneCF = radial(BOARD_IN + 8, craneA, DOCK_TOP)
 	local yellow = Color3.fromRGB(240, 185, 30)
 	for _, x in ipairs({ -2.5, 2.5 }) do
@@ -887,7 +1068,7 @@ local function buildHarbor(root)
 				CFrame = craneCF * CFrame.new(x, 15, z),
 				Material = M.Metal,
 				Color = yellow,
-				Parent = dock,
+				Parent = craneModel,
 			})
 		end
 	end
@@ -898,7 +1079,7 @@ local function buildHarbor(root)
 			CFrame = craneCF * CFrame.new(0, h, 0),
 			Material = M.Metal,
 			Color = yellow,
-			Parent = dock,
+			Parent = craneModel,
 		})
 	end
 	part({
@@ -907,7 +1088,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(0, 32, 0),
 		Material = M.Metal,
 		Color = yellow,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	part({
 		Name = "CraneBoom",
@@ -915,7 +1096,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(-15, 33.5, 0),
 		Material = M.Metal,
 		Color = yellow,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	deco({
 		Name = "CraneCable",
@@ -923,7 +1104,7 @@ local function buildHarbor(root)
 		CFrame = craneCF * CFrame.new(-30, 24.5, 0),
 		Material = M.Metal,
 		Color = IRON,
-		Parent = dock,
+		Parent = craneModel,
 	})
 	part({
 		Name = "CraneHook",
@@ -932,8 +1113,12 @@ local function buildHarbor(root)
 		Material = M.Metal,
 		Color = IRON,
 		Mesh = SPHERE,
-		Parent = dock,
+		Parent = craneModel,
 	})
+
+	if useCustom("Crane", craneCF, Config.CustomModels.Crane.Size, dock) then
+		craneModel:Destroy()
+	end
 
 	-- Crates, barrels, benches scattered on the plaza
 	for _ = 1, 30 do
@@ -969,10 +1154,21 @@ local function buildHarbor(root)
 	for _ = 1, 22 do
 		local a = rng:NextNumber(0, TAU)
 		local r = rng:NextNumber(205, 285)
-		palmTree(dock, Vector3.new(math.cos(a) * r, S + 3.3, math.sin(a) * r))
+		local pos = Vector3.new(math.cos(a) * r, S + 3.1, math.sin(a) * r)
+		local cf = CFrame.new(pos) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+		local size = Config.CustomModels.PalmTree.Size * rng:NextNumber(0.85, 1.2)
+		local tree = Config.PlaceCustomModel("PalmTree", cf, size, { Ground = true, AllAxes = true })
+		if tree then
+			tree.Parent = dock
+		else
+			palmTree(dock, pos)
+		end
 	end
 
 	-- Lighthouse
+	local lhModel = Instance.new("Model")
+	lhModel.Name = "Lighthouse"
+	lhModel.Parent = dock
 	local lhPos = Vector3.new(math.cos(3.9) * 255, S + 3, math.sin(3.9) * 255)
 	for i = 0, 6 do
 		part({
@@ -983,7 +1179,7 @@ local function buildHarbor(root)
 			Material = M.SmoothPlastic,
 			Color = (i % 2 == 0) and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(200, 40, 40),
 			CastShadow = true,
-			Parent = dock,
+			Parent = lhModel,
 		})
 	end
 	local beacon = deco({
@@ -993,7 +1189,7 @@ local function buildHarbor(root)
 		CFrame = CFrame.new(lhPos + Vector3.new(0, 52, 0)),
 		Material = M.Neon,
 		Color = Color3.fromRGB(255, 240, 170),
-		Parent = dock,
+		Parent = lhModel,
 	})
 	light(beacon, 60, 2, Color3.fromRGB(255, 235, 170), false)
 	part({
@@ -1003,8 +1199,33 @@ local function buildHarbor(root)
 		Material = M.Metal,
 		Color = Color3.fromRGB(40, 40, 45),
 		Mesh = SPHERE,
-		Parent = dock,
+		Parent = lhModel,
 	})
+
+	if useCustom("Lighthouse", CFrame.new(lhPos), Config.CustomModels.Lighthouse.Size, dock) then
+		lhModel:Destroy()
+	end
+
+	-- Cottages around the island
+	for i, a in ipairs({ 0.45, 0.95, 2.05, 2.75, 3.45, 4.25, 5.25, 5.85 }) do
+		local cf = radial(232 + (i % 2) * 18, a, S + 3)
+		if not useCustom("House", cf, Config.CustomModels.House.Size, dock) then
+			cottage(dock, cf)
+		end
+	end
+
+	-- Boats anchored out at sea
+	for i = 1, 7 do
+		local a = i / 7 * TAU + rng:NextNumber(-0.2, 0.2)
+		local r = rng:NextNumber(400, 680)
+		local cf = CFrame.new(math.cos(a) * r, S, math.sin(a) * r) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+		local boat = Config.PlaceCustomModel("Boat", cf, Config.CustomModels.Boat.Size, { Ground = false })
+		if boat then
+			boat.Parent = dock
+		else
+			sailboat(dock, cf)
+		end
+	end
 
 	-- Buoys floating in the Well
 	for i = 1, 8 do
@@ -1472,6 +1693,17 @@ local function setupLighting(root)
 	Lighting.EnvironmentDiffuseScale = 1
 	Lighting.EnvironmentSpecularScale = 1
 	Lighting.FogEnd = 100000
+	-- real volumetric clouds and swaying terrain grass
+	pcall(function()
+		local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds")
+		clouds.Cover = 0.55
+		clouds.Density = 0.7
+		clouds.Color = Color3.fromRGB(255, 255, 255)
+		clouds.Parent = workspace.Terrain
+	end)
+	pcall(function()
+		workspace.Terrain.Decoration = true
+	end)
 
 	_ = root
 end

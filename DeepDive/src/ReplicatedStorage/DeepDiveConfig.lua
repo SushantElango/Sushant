@@ -491,6 +491,42 @@ Config.Sounds = {
 }
 
 ------------------------------------------------------------------------
+-- MUSIC
+-- Paste audio IDs here (Toolbox > Audio, or Creator Store > Audio, pick a
+-- track, copy the number in its link). Example: "rbxassetid://1234567890"
+-- OR put Sound objects named "SurfaceMusic" and "DeepMusic" inside the
+-- ReplicatedStorage > DeepDiveModels folder. Leave "" for no music.
+------------------------------------------------------------------------
+Config.Music = {
+	Surface = "", -- calm theme on the dock / at the surface
+	Deep = "", -- intense track while diving
+	Volume = 0.4,
+	FadeTime = 2,
+}
+
+------------------------------------------------------------------------
+-- CUSTOM 3D MODELS
+-- Drop real models (Toolbox / Creator Store, or your own from Blender)
+-- into a folder:  ReplicatedStorage > DeepDiveModels
+-- and name them exactly like the keys below. The game swaps them in for
+-- the built-in shapes automatically and scales them to fit.
+-- If a model faces the wrong way, change its Yaw (degrees: 90, 180, -90).
+------------------------------------------------------------------------
+Config.CustomModels = {
+	Submarine = { Yaw = 0 }, -- your sub (its front should point the way the sub drives)
+	BiterFish = { Yaw = 0, Length = 4.5 },
+	Jellyfish = { Yaw = 0, Length = 4 },
+	Eel = { Yaw = 0, Length = 16 },
+	Shop = { Yaw = 0, Size = 28 },
+	Warehouse = { Yaw = 0, Size = 40 },
+	House = { Yaw = 0, Size = 22 }, -- placed around the island
+	Lighthouse = { Yaw = 0, Size = 14 },
+	PalmTree = { Yaw = 0, Size = 16 },
+	Crane = { Yaw = 0, Size = 34 },
+	Boat = { Yaw = 0, Size = 40 }, -- boats anchored out at sea
+}
+
+------------------------------------------------------------------------
 -- HELPERS
 ------------------------------------------------------------------------
 -- Computes the live sub stats from a player's saved upgrades.
@@ -530,6 +566,73 @@ function Config.FormatNumber(n)
 		formatted = formatted:sub(2)
 	end
 	return (n < 0 and "-" or "") .. formatted
+end
+
+-- Finds a custom model in ReplicatedStorage > DeepDiveModels (or nil).
+function Config.GetCustomModel(name)
+	local folder = game:GetService("ReplicatedStorage"):FindFirstChild("DeepDiveModels")
+	local m = folder and folder:FindFirstChild(name)
+	if m and m:IsA("Model") then
+		return m
+	end
+	return nil
+end
+
+-- Clones a custom model, removes its scripts, scales it to `targetSize`
+-- studs and centres it on `cf`. Server only.
+--   opts.Ground  = put the bottom of the model at cf's height (buildings)
+--   opts.AllAxes = measure length/height too, not just the footprint (creatures, subs)
+--   opts.WeldTo  = weld it to this part instead of anchoring (moving things)
+function Config.PlaceCustomModel(name, cf, targetSize, opts)
+	local template = Config.GetCustomModel(name)
+	if not template then
+		return nil
+	end
+	opts = opts or {}
+	local settings = Config.CustomModels[name] or {}
+	local m = template:Clone()
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("BaseScript") or d:IsA("ModuleScript") or d:IsA("Humanoid") or d:IsA("AnimationController") then
+			d:Destroy()
+		elseif d:IsA("Seat") or d:IsA("VehicleSeat") then
+			d.Disabled = true
+		end
+	end
+	local _, size = m:GetBoundingBox()
+	local biggest = math.max(size.X, size.Z)
+	if opts.AllAxes then
+		biggest = math.max(biggest, size.Y)
+	end
+	if biggest > 0 and targetSize then
+		pcall(function()
+			m:ScaleTo(m:GetScale() * targetSize / biggest)
+		end)
+	end
+	local boxCF, box = m:GetBoundingBox()
+	local offset = boxCF:ToObjectSpace(m:GetPivot())
+	local placeCF = cf * CFrame.Angles(0, math.rad(settings.Yaw or 0), 0)
+	if opts.Ground then
+		placeCF = placeCF * CFrame.new(0, box.Y / 2, 0)
+	end
+	m:PivotTo(placeCF * offset)
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("BasePart") then
+			if opts.WeldTo then
+				d.Anchored = false
+				d.Massless = true
+				d.CanCollide = false
+				d.CanTouch = false
+				d.CanQuery = false
+				local w = Instance.new("WeldConstraint")
+				w.Part0 = opts.WeldTo
+				w.Part1 = d
+				w.Parent = d
+			else
+				d.Anchored = true
+			end
+		end
+	end
+	return m
 end
 
 return Config

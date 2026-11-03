@@ -496,7 +496,19 @@ local function spawnMonster(kind, position, packId)
 	if not def or not builder then
 		return
 	end
-	local model, root = builder()
+	local model, root
+	local custom = Config.GetCustomModel(kind)
+	if custom then
+		-- ReplicatedStorage > DeepDiveModels > BiterFish / Jellyfish / Eel
+		model = Instance.new("Model")
+		model.Name = kind
+		root = makeRoot(model, Vector3.new(3, 3, 4))
+		local length = (Config.CustomModels[kind] or {}).Length or 4
+		local look = Config.PlaceCustomModel(kind, CFrame.new(), length, { WeldTo = root, AllAxes = true })
+		look.Parent = model
+	else
+		model, root = builder()
+	end
 	local depth = S - position.Y
 	local mult = zoneMult(depth)
 	nextId += 1

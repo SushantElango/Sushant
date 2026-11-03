@@ -126,6 +126,15 @@ xml = ('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" '
           '<float name="EnvironmentDiffuseScale">1</float>'
           '<float name="EnvironmentSpecularScale">1</float>'
           '</Properties></Item>')
+       + ('<Item class="ReplicatedStorage" referent="RBXRS"><Properties><string name="Name">ReplicatedStorage</string></Properties>'
+          '<Item class="Folder" referent="RBXMODELS"><Properties><string name="Name">DeepDiveModels</string></Properties>'
+          '<Item class="StringValue" referent="RBXREADME"><Properties><string name="Name">READ_ME</string>'
+          '<string name="Value">' + escape(
+              "Drag free models from the Toolbox into this folder and rename them: "
+              "Submarine, BiterFish, Jellyfish, Eel, Shop, Warehouse, House, Lighthouse, PalmTree, Crane, Boat. "
+              "For music, drag Sound objects here named SurfaceMusic and DeepMusic. "
+              "The game uses whatever it finds here instead of the built-in shapes.") + '</string>'
+          '</Properties></Item></Item></Item>')
        + service("ServerScriptService", [script_item("Script", "DeepDiveServer", server)])
        + service("StarterPlayer", [service("StarterPlayerScripts", [script_item("LocalScript", "DeepDiveClient", client)])])
        + "</roblox>")
